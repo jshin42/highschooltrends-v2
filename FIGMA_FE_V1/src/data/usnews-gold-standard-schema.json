@@ -1,0 +1,353 @@
+{
+  "schema_version": "1.0",
+  "description": "Gold standard schema for extracting US News high school data from HTML files",
+  "source_years": ["2024", "2025"],
+  "total_files": {
+    "2024": 17660,
+    "2025": 18878
+  },
+  "ranking_buckets": {
+    "bucket_1": {
+      "name": "Verified National Ranks",
+      "description": "National exact ranks (#1-13,426)",
+      "confidence": "verified",
+      "range": [1, 13426]
+    },
+    "bucket_2": {
+      "name": "Estimated National Ranks", 
+      "description": "National range ranks (#13,427-17,901)",
+      "confidence": "estimated",
+      "range": [13427, 17901]
+    },
+    "bucket_3": {
+      "name": "ML Estimated Ranks",
+      "description": "Unranked schools with ML-generated estimates",
+      "confidence": "ml_estimated",
+      "range": [17902, 25000]
+    },
+    "state_only": {
+      "name": "State-Only Ranks",
+      "description": "Schools with only state ranking (use higher number)",
+      "confidence": "state_verified",
+      "processing_rule": "use_higher_state_rank"
+    }
+  },
+  "data_schema": {
+    "core_identifiers": {
+      "year": {
+        "type": "integer",
+        "source": "filename_or_metadata",
+        "required": true,
+        "example": 2025
+      },
+      "name": {
+        "type": "string",
+        "required": true,
+        "example": "William Fremd High School"
+      },
+      "address_raw": {
+        "type": "string",
+        "required": true,
+        "example": "1000 S Quentin Rd, Palatine, Illinois"
+      },
+      "city": {
+        "type": "string",
+        "required": true,
+        "parsed_from": "address_raw",
+        "example": "Palatine"
+      },
+      "state": {
+        "type": "string",
+        "required": true,
+        "parsed_from": "address_raw",
+        "example": "Illinois"
+      },
+      "zip": {
+        "type": "string",
+        "required": false,
+        "parsed_from": "address_raw",
+        "example": "60067"
+      },
+      "phone": {
+        "type": "string",
+        "required": false,
+        "format": "(XXX) XXX-XXXX",
+        "example": "(847) 755-2610"
+      },
+      "website": {
+        "type": "string",
+        "required": false,
+        "example": "http://adc.d211.org/Domain/9"
+      }
+    },
+    "basic_info": {
+      "grades": {
+        "type": "string",
+        "required": true,
+        "example": "9-12"
+      },
+      "enrollment": {
+        "type": "integer",
+        "required": true,
+        "processing": "remove_commas",
+        "example": 2657
+      },
+      "student_teacher_ratio": {
+        "type": "string",
+        "required": true,
+        "format": "XX:1",
+        "example": "16:1"
+      },
+      "setting": {
+        "type": "string",
+        "required": false,
+        "example": "large suburb"
+      },
+      "fulltimeteachercount": {
+        "type": "integer",
+        "required": false,
+        "example": 163
+      }
+    },
+    "rankings": {
+      "nationalrank": {
+        "type": "integer",
+        "required": false,
+        "bucket_assignment": "auto",
+        "example": 397
+      },
+      "staterank": {
+        "type": "integer", 
+        "required": false,
+        "example": 14
+      },
+      "ranking_bucket": {
+        "type": "string",
+        "required": true,
+        "enum": ["bucket_1", "bucket_2", "bucket_3", "state_only"],
+        "auto_calculated": true
+      },
+      "confidence_level": {
+        "type": "string",
+        "required": true,
+        "enum": ["verified", "estimated", "ml_estimated", "state_verified"],
+        "auto_calculated": true
+      }
+    },
+    "academic_performance": {
+      "apparticipationrate": {
+        "type": "string",
+        "format": "XX%",
+        "required": false,
+        "example": "62%"
+      },
+      "appassrate": {
+        "type": "string",
+        "format": "XX%", 
+        "required": false,
+        "example": "56%"
+      },
+      "mathproficiency": {
+        "type": "string",
+        "format": "XX%",
+        "required": false,
+        "example": "64%"
+      },
+      "readingproficiency": {
+        "type": "string",
+        "format": "XX%",
+        "required": false,
+        "example": "63%"
+      },
+      "scienceproficiency": {
+        "type": "string", 
+        "format": "XX%",
+        "required": false,
+        "example": "77%"
+      },
+      "graduationrate": {
+        "type": "string",
+        "format": "XX%",
+        "required": false,
+        "example": "94%"
+      },
+      "collegereadinessindex": {
+        "type": "float",
+        "required": false,
+        "example": 57.6
+      }
+    },
+    "demographics": {
+      "white": {
+        "type": "string",
+        "format": "XX.X%",
+        "required": false,
+        "example": "45.3%"
+      },
+      "asian": {
+        "type": "string",
+        "format": "XX.X%",
+        "required": false,
+        "example": "31.6%"
+      },
+      "hispanic": {
+        "type": "string",
+        "format": "XX.X%", 
+        "required": false,
+        "example": "14.0%"
+      },
+      "black": {
+        "type": "string",
+        "format": "XX.X%",
+        "required": false,
+        "example": "4.7%"
+      },
+      "twoormoreraces": {
+        "type": "string",
+        "format": "XX.X%",
+        "required": false,
+        "example": "4.1%"
+      },
+      "americanindian": {
+        "type": "string",
+        "format": "XX.XX%",
+        "required": false,
+        "example": "0.01%"
+      },
+      "femalepercentage": {
+        "type": "string",
+        "format": "XX%",
+        "required": false,
+        "example": "49%"
+      },
+      "malepercentage": {
+        "type": "string",
+        "format": "XX%", 
+        "required": false,
+        "example": "51%"
+      }
+    },
+    "economic_indicators": {
+      "economicallydisadvantaged": {
+        "type": "string",
+        "required": false,
+        "null_values": ["N/A", "Not Available", ""],
+        "example": "N/A"
+      },
+      "freelunchprogram": {
+        "type": "string",
+        "required": false,
+        "null_values": ["N/A", "Not Available", ""],
+        "example": "N/A"
+      },
+      "reducedpricelunchprogram": {
+        "type": "string",
+        "required": false,
+        "null_values": ["N/A", "Not Available", ""],
+        "example": "N/A"
+      }
+    },
+    "metadata": {
+      "source_file": {
+        "type": "string",
+        "required": true,
+        "example": "william-fremd-high-school-6921/docker_curl_20250821_061341.html"
+      },
+      "extraction_timestamp": {
+        "type": "datetime",
+        "required": true,
+        "format": "ISO8601"
+      },
+      "extraction_confidence": {
+        "type": "float",
+        "required": true,
+        "range": [0.0, 1.0],
+        "example": 0.95
+      },
+      "data_completeness": {
+        "type": "float", 
+        "required": true,
+        "range": [0.0, 1.0],
+        "calculation": "filled_fields / total_fields"
+      }
+    }
+  },
+  "extraction_rules": {
+    "ranking_bucket_assignment": {
+      "bucket_1": "nationalrank >= 1 AND nationalrank <= 13426",
+      "bucket_2": "nationalrank >= 13427 AND nationalrank <= 17901", 
+      "bucket_3": "nationalrank IS NULL OR nationalrank > 17901",
+      "state_only": "staterank IS NOT NULL AND nationalrank IS NULL"
+    },
+    "address_parsing": {
+      "method": "regex",
+      "pattern": "^(.+),\\s*([^,]+),\\s*([^,]+)(?:\\s+(\\d{5}(?:-\\d{4})?))?$",
+      "groups": ["street", "city", "state", "zip"]
+    },
+    "data_validation": {
+      "enrollment": "remove_commas_and_convert_to_int",
+      "percentages": "ensure_percent_sign_suffix",
+      "phone": "format_as_(XXX)_XXX-XXXX",
+      "ratios": "format_as_XX:1"
+    },
+    "null_handling": {
+      "missing_values": ["N/A", "Not Available", "", "—", "-"],
+      "convert_to_null": true
+    }
+  },
+  "quality_assurance": {
+    "required_fields_minimum": ["year", "name", "address_raw", "city", "state"],
+    "confidence_thresholds": {
+      "high": 0.90,
+      "medium": 0.70, 
+      "low": 0.50
+    },
+    "validation_checks": [
+      "enrollment_positive_integer",
+      "percentages_0_to_100",
+      "grades_valid_format",
+      "year_valid_range"
+    ]
+  },
+  "sample_record": {
+    "year": 2025,
+    "name": "William Fremd High School",
+    "address_raw": "1000 S Quentin Rd, Palatine, Illinois",
+    "city": "Palatine", 
+    "state": "Illinois",
+    "zip": null,
+    "phone": "(847) 755-2610",
+    "website": "http://adc.d211.org/Domain/9",
+    "grades": "9-12",
+    "enrollment": 2657,
+    "student_teacher_ratio": "16:1",
+    "nationalrank": 397,
+    "staterank": 14,
+    "ranking_bucket": "bucket_1",
+    "confidence_level": "verified",
+    "apparticipationrate": "62%",
+    "appassrate": "56%",
+    "mathproficiency": "64%",
+    "readingproficiency": "63%",
+    "scienceproficiency": "77%",
+    "graduationrate": "94%",
+    "white": "45.3%",
+    "asian": "31.6%",
+    "hispanic": "14.0%",
+    "black": "4.7%",
+    "twoormoreraces": "4.1%",
+    "americanindian": "0.01%",
+    "femalepercentage": "49%",
+    "malepercentage": "51%",
+    "economicallydisadvantaged": null,
+    "freelunchprogram": null,
+    "reducedpricelunchprogram": null,
+    "collegereadinessindex": 57.6,
+    "setting": "large suburb",
+    "fulltimeteachercount": 163,
+    "source_file": "william-fremd-high-school-6921/docker_curl_20250821_061341.html",
+    "extraction_timestamp": "2025-01-20T12:00:00Z",
+    "extraction_confidence": 0.95,
+    "data_completeness": 0.87
+  }
+}
