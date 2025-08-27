@@ -432,6 +432,82 @@ export class BronzeService {
       const usage = process.memoryUsage();
       return Math.round((usage.heapUsed / usage.heapTotal) * 100);
     });
+
+    // Register circuit breaker metrics
+    healthMonitor.registerMetric('circuit_breaker_open_count', async (): Promise<number> => {
+      const metrics = this.processor.getCircuitBreakerMetrics();
+      let openCount = 0;
+      for (const [name, metric] of Object.entries(metrics)) {
+        if (metric.state === 'OPEN') {
+          openCount++;
+        }
+      }
+      return openCount;
+    });
+
+    healthMonitor.registerMetric('circuit_breaker_failure_rate', async (): Promise<number> => {
+      const metrics = this.processor.getCircuitBreakerMetrics();
+      let totalOperations = 0;
+      let totalFailures = 0;
+      
+      for (const [name, metric] of Object.entries(metrics)) {
+        totalOperations += metric.totalOperations;
+        totalFailures += metric.failureCount;
+      }
+      
+      return totalOperations > 0 ? (totalFailures / totalOperations) * 100 : 0;
+    });
+
+    // Register circuit breaker component health check
+    healthMonitor.registerComponent('circuit_breakers', async (): Promise<ComponentHealth> => {
+      try {
+        const metrics = this.processor.getCircuitBreakerMetrics();
+        const openCircuits: string[] = [];
+        let totalOperations = 0;
+        let totalFailures = 0;
+
+        for (const [name, metric] of Object.entries(metrics)) {
+          if (metric.state === 'OPEN') {
+            openCircuits.push(name);
+          }
+          totalOperations += metric.totalOperations;
+          totalFailures += metric.failureCount;
+        }
+
+        const failureRate = totalOperations > 0 ? (totalFailures / totalOperations) * 100 : 0;
+        
+        let status: ComponentHealth['status'] = 'operational';
+        let message = 'All circuit breakers operational';
+
+        if (openCircuits.length > 0) {
+          status = 'degraded';
+          message = `${openCircuits.length} circuit breaker(s) open: ${openCircuits.join(', ')}`;
+        } else if (failureRate > 10) {
+          status = 'degraded';
+          message = `High failure rate detected: ${failureRate.toFixed(1)}%`;
+        }
+
+        return {
+          name: 'circuit_breakers',
+          status,
+          message,
+          metrics: {
+            open_circuits: openCircuits.length,
+            total_circuits: Object.keys(metrics).length,
+            failure_rate_percentage: Math.round(failureRate * 100) / 100,
+            total_operations: totalOperations
+          },
+          last_checked: new Date().toISOString()
+        };
+      } catch (error) {
+        return {
+          name: 'circuit_breakers',
+          status: 'failed',
+          message: `Circuit breaker health check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          last_checked: new Date().toISOString()
+        };
+      }
+    });
   }
 
   /**

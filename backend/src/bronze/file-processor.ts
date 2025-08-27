@@ -6,6 +6,7 @@
  */
 
 import * as fs from 'fs/promises';
+import type { Stats as FsStats } from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { glob } from 'glob';
@@ -20,14 +21,45 @@ import {
   PriorityBucket
 } from './types';
 import { StructuredLogger, createBronzeLogger } from '../common/logger';
+import { CircuitBreaker, CircuitBreakerManager, CIRCUIT_BREAKER_CONFIGS, circuitBreakerManager } from '../common/circuit-breaker';
 
 export class BronzeFileProcessor {
   private config: BronzeConfiguration;
   private logger: StructuredLogger;
+  private circuitBreakers: {
+    fileSystem: CircuitBreaker<any>;
+    fileRead: CircuitBreaker<Buffer>;
+    fileStat: CircuitBreaker<FsStats>;
+  };
 
   constructor(config: BronzeConfiguration, logger?: StructuredLogger) {
     this.config = config;
     this.logger = logger || createBronzeLogger({ component: 'bronze-file-processor' });
+    
+    // Initialize circuit breakers for external drive operations
+    this.circuitBreakers = {
+      fileSystem: circuitBreakerManager.register(
+        'external-drive-filesystem',
+        CIRCUIT_BREAKER_CONFIGS.EXTERNAL_DRIVE,
+        async (operation: () => Promise<any>) => operation()
+      ),
+      fileRead: circuitBreakerManager.register(
+        'external-drive-read',
+        CIRCUIT_BREAKER_CONFIGS.FILE_PROCESSING,
+        async (filePath: string) => fs.readFile(filePath)
+      ),
+      fileStat: circuitBreakerManager.register(
+        'external-drive-stat',
+        CIRCUIT_BREAKER_CONFIGS.EXTERNAL_DRIVE,
+        async (filePath: string) => fs.stat(filePath)
+      )
+    };
+    
+    this.logger.info('Circuit breakers initialized for external drive operations', {
+      fileSystemBreaker: this.circuitBreakers.fileSystem.getName(),
+      fileReadBreaker: this.circuitBreakers.fileRead.getName(),
+      fileStatBreaker: this.circuitBreakers.fileStat.getName()
+    });
   }
 
   /**
@@ -44,7 +76,7 @@ export class BronzeFileProcessor {
       });
 
       for (const sourceDir of this.config.source_directories) {
-        try {
+        const result = await this.circuitBreakers.fileSystem.execute(async () => {
           // Look for HTML files with docker_curl pattern in school-specific directories
           const pattern = path.join(sourceDir, '**/docker_curl_*.html');
           const files = await glob(pattern, {
@@ -52,14 +84,23 @@ export class BronzeFileProcessor {
             ignore: ['**/node_modules/**', '**/.*/**']
           });
           
-          allFiles.push(...files);
           this.logger.info('Files discovered in directory', {
             sourceDir,
             fileCount: files.length,
             pattern
           });
-        } catch (error) {
-          this.logger.error('Error scanning directory', error as Error, { sourceDir });
+          
+          return files;
+        });
+        
+        if (result.success && result.data) {
+          allFiles.push(...result.data);
+        } else {
+          this.logger.error('Circuit breaker blocked directory scan or operation failed', result.error || new Error('Unknown circuit breaker error'), {
+            sourceDir,
+            circuitState: this.circuitBreakers.fileSystem.getState(),
+            retryCount: result.retryCount
+          });
         }
       }
 
@@ -92,8 +133,14 @@ export class BronzeFileProcessor {
     };
 
     try {
-      // First try to get file stats to check if file exists
-      const stats = await fs.stat(filePath);
+      // First try to get file stats to check if file exists (with circuit breaker)
+      const statResult = await this.circuitBreakers.fileStat.execute(filePath);
+      
+      if (!statResult.success || !statResult.data) {
+        throw statResult.error || new Error('File stat operation failed through circuit breaker');
+      }
+      
+      const stats = statResult.data;
       metadata.file_size = stats.size;
 
       // Extract school slug from directory path
@@ -135,9 +182,14 @@ export class BronzeFileProcessor {
         metadata.validation_errors.push(`File size ${metadata.file_size} exceeds maximum ${this.config.max_file_size}`);
       }
 
-      // Calculate checksum if verification enabled
+      // Calculate checksum if verification enabled (with circuit breaker)
       if (this.config.checksum_verification) {
-        metadata.checksum_sha256 = await this.calculateChecksum(filePath);
+        const checksumResult = await this.calculateChecksumWithCircuitBreaker(filePath);
+        if (checksumResult.success && checksumResult.data) {
+          metadata.checksum_sha256 = checksumResult.data;
+        } else {
+          metadata.validation_errors.push(`Checksum calculation failed: ${checksumResult.error?.message || 'Circuit breaker blocked operation'}`);
+        }
       }
 
       // File is valid if no validation errors
@@ -167,6 +219,25 @@ export class BronzeFileProcessor {
       return hash.digest('hex');
     } catch (error) {
       throw new Error(`Failed to calculate checksum: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+  
+  /**
+   * Calculate SHA256 checksum with circuit breaker protection
+   */
+  private async calculateChecksumWithCircuitBreaker(filePath: string): Promise<{ success: boolean; data?: string; error?: Error }> {
+    const result = await this.circuitBreakers.fileRead.execute(filePath);
+    
+    if (!result.success || !result.data) {
+      return { success: false, error: result.error };
+    }
+    
+    try {
+      const hash = crypto.createHash('sha256');
+      hash.update(result.data);
+      return { success: true, data: hash.digest('hex') };
+    } catch (error) {
+      return { success: false, error: error as Error };
     }
   }
 
@@ -458,5 +529,31 @@ export class BronzeFileProcessor {
     }
 
     this.logger.info('Configuration validated successfully', configData);
+  }
+  
+  /**
+   * Get circuit breaker metrics for monitoring
+   */
+  getCircuitBreakerMetrics() {
+    return {
+      fileSystem: this.circuitBreakers.fileSystem.getMetrics(),
+      fileRead: this.circuitBreakers.fileRead.getMetrics(),
+      fileStat: this.circuitBreakers.fileStat.getMetrics()
+    };
+  }
+  
+  /**
+   * Reset all circuit breakers (for testing/recovery)
+   */
+  resetCircuitBreakers(): void {
+    this.circuitBreakers.fileSystem.reset();
+    this.circuitBreakers.fileRead.reset();
+    this.circuitBreakers.fileStat.reset();
+    
+    this.logger.info('All circuit breakers reset', {
+      fileSystemState: this.circuitBreakers.fileSystem.getState(),
+      fileReadState: this.circuitBreakers.fileRead.getState(),
+      fileStatState: this.circuitBreakers.fileStat.getState()
+    });
   }
 }
