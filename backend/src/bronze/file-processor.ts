@@ -70,6 +70,10 @@ export class BronzeFileProcessor {
     };
 
     try {
+      // First try to get file stats to check if file exists
+      const stats = await fs.stat(filePath);
+      metadata.file_size = stats.size;
+
       // Extract school slug from directory path
       // Expected format: /path/to/school-name-id/docker_curl_timestamp.html
       const pathParts = path.dirname(filePath).split(path.sep);
@@ -102,10 +106,6 @@ export class BronzeFileProcessor {
         metadata.validation_errors.push('Unable to parse timestamp from filename');
       }
 
-      // Get file stats
-      const stats = await fs.stat(filePath);
-      metadata.file_size = stats.size;
-
       // Validate file size
       if (metadata.file_size === 0) {
         metadata.validation_errors.push('File is empty');
@@ -122,8 +122,13 @@ export class BronzeFileProcessor {
       metadata.is_valid = metadata.validation_errors.length === 0;
 
     } catch (error) {
-      metadata.validation_errors.push(`File processing error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // If we can't stat the file, it's a file system error
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      metadata.validation_errors.push(`File processing error: ${errorMessage}`);
       metadata.is_valid = false;
+      
+      // Store error type info for the calling function
+      (metadata as any)._fileSystemError = error;
     }
 
     return metadata;
@@ -190,7 +195,7 @@ export class BronzeFileProcessor {
    * Process a batch of HTML files and return Bronze records
    * This method handles the core ingestion logic
    */
-  async processBatch(filePaths: string[]): Promise<BatchProcessingResult> {
+  async processBatch(filePaths: string[], database?: any): Promise<BatchProcessingResult> {
     const startTime = Date.now();
     const result: BatchProcessingResult = {
       total_files: filePaths.length,
@@ -213,16 +218,52 @@ export class BronzeFileProcessor {
           const bronzeRecord = this.createBronzeRecord(metadata);
           
           if (metadata.is_valid) {
-            result.successful_ingestions++;
-            // In a real implementation, this would save to database
-            // For now, we'll log the successful record
-            console.log(`✓ Processed: ${metadata.school_slug}`);
-            return { success: true, record: bronzeRecord };
+            // Save to database if provided
+            if (database) {
+              try {
+                database.insertRecord(bronzeRecord);
+                result.successful_ingestions++;
+                console.log(`✓ Processed: ${metadata.school_slug}`);
+                return { success: true, record: bronzeRecord };
+              } catch (dbError) {
+                // Handle database errors (e.g., duplicates)
+                result.failed_ingestions++;
+                const error: ProcessingError = {
+                  file_path: filePath,
+                  error_type: 'duplicate_slug',
+                  error_message: `Database error: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`,
+                  timestamp: new Date().toISOString()
+                };
+                result.errors.push(error);
+                console.log(`✗ DB Error: ${filePath} - ${error.error_message}`);
+                return { success: false, error };
+              }
+            } else {
+              result.successful_ingestions++;
+              console.log(`✓ Processed: ${metadata.school_slug}`);
+              return { success: true, record: bronzeRecord };
+            }
           } else {
             result.failed_ingestions++;
+            
+            // Determine error type based on whether it's a file system error or validation error
+            let errorType: ProcessingError['error_type'] = 'invalid_format';
+            if ((metadata as any)._fileSystemError) {
+              const fsError = (metadata as any)._fileSystemError;
+              if (fsError instanceof Error) {
+                if (fsError.message.includes('ENOENT') || fsError.message.includes('no such file')) {
+                  errorType = 'file_not_found';
+                } else if (fsError.message.includes('EACCES') || fsError.message.includes('permission')) {
+                  errorType = 'permission_denied';
+                } else {
+                  errorType = 'corrupted_file';
+                }
+              }
+            }
+            
             const error: ProcessingError = {
               file_path: filePath,
-              error_type: 'invalid_format',
+              error_type: errorType,
               error_message: metadata.validation_errors.join('; '),
               timestamp: new Date().toISOString()
             };
@@ -232,9 +273,21 @@ export class BronzeFileProcessor {
           }
         } catch (error) {
           result.failed_ingestions++;
+          // Determine error type based on the error
+          let errorType: ProcessingError['error_type'] = 'file_not_found';
+          if (error instanceof Error) {
+            if (error.message.includes('ENOENT') || error.message.includes('no such file')) {
+              errorType = 'file_not_found';
+            } else if (error.message.includes('EACCES') || error.message.includes('permission')) {
+              errorType = 'permission_denied';
+            } else {
+              errorType = 'corrupted_file';
+            }
+          }
+          
           const processingError: ProcessingError = {
             file_path: filePath,
-            error_type: 'file_not_found',
+            error_type: errorType,
             error_message: error instanceof Error ? error.message : 'Unknown error',
             timestamp: new Date().toISOString()
           };

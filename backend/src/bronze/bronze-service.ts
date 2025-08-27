@@ -16,19 +16,17 @@ import {
   PriorityBucket
 } from './types';
 import { BronzeFileProcessor } from './file-processor';
+import { BronzeDatabase } from './database';
 
 export class BronzeService {
   private processor: BronzeFileProcessor;
   private config: BronzeConfiguration;
+  private database: BronzeDatabase;
 
-  // In a real implementation, this would be a database connection
-  // For now, we'll use an in-memory store for demonstration
-  private bronzeRecords: Map<string, BronzeRecord> = new Map();
-  private nextId = 1;
-
-  constructor(config: BronzeConfiguration) {
+  constructor(config: BronzeConfiguration, dbPath?: string) {
     this.config = config;
     this.processor = new BronzeFileProcessor(config);
+    this.database = new BronzeDatabase(dbPath);
   }
 
   /**
@@ -68,7 +66,7 @@ export class BronzeService {
    * Process a specific batch of files
    */
   async processBatch(filePaths: string[]): Promise<BatchProcessingResult> {
-    return await this.processor.processBatch(filePaths);
+    return await this.processor.processBatch(filePaths, this.database);
   }
 
   /**
@@ -76,11 +74,11 @@ export class BronzeService {
    */
   async getStatistics(): Promise<BronzeStatistics> {
     const stats: BronzeStatistics = {
-      total_files_discovered: this.bronzeRecords.size,
-      files_by_status: this.countByStatus(),
-      files_by_dataset: this.countByDataset(),
-      files_by_priority: this.countByPriority(),
-      average_file_size: this.calculateAverageFileSize(),
+      total_files_discovered: this.database.getTotalCount(),
+      files_by_status: this.database.getCountByStatus(),
+      files_by_dataset: this.database.getCountByDataset(),
+      files_by_priority: this.database.getCountByPriority(),
+      average_file_size: this.database.getAverageFileSize(),
       processing_rate: this.calculateProcessingRate(),
       last_updated: new Date().toISOString()
     };
@@ -130,18 +128,14 @@ export class BronzeService {
    * Get Bronze records by status for monitoring and debugging
    */
   async getRecordsByStatus(status: ProcessingStatus): Promise<BronzeRecord[]> {
-    return Array.from(this.bronzeRecords.values())
-      .filter(record => record.processing_status === status);
+    return this.database.getRecordsByStatus(status);
   }
 
   /**
    * Get Bronze record by school slug
    */
   async getRecordBySlug(schoolSlug: string): Promise<BronzeRecord | null> {
-    const record = Array.from(this.bronzeRecords.values())
-      .find(record => record.school_slug === schoolSlug);
-    
-    return record || null;
+    return this.database.getRecordBySlug(schoolSlug);
   }
 
   /**
@@ -149,19 +143,11 @@ export class BronzeService {
    * This would be called by the Silver layer when processing begins/completes
    */
   async updateRecordStatus(id: number, status: ProcessingStatus, errors?: string[]): Promise<void> {
-    const record = Array.from(this.bronzeRecords.values())
-      .find(record => record.id === id);
-    
-    if (record) {
-      record.processing_status = status;
-      record.updated_at = new Date().toISOString();
-      
-      if (errors && errors.length > 0) {
-        record.processing_errors = [...(record.processing_errors || []), ...errors];
-      }
-      
-      this.bronzeRecords.set(`${record.id}`, record);
+    const success = this.database.updateRecordStatus(id, status, errors);
+    if (success) {
       console.log(`Updated record ${id} status to ${status}`);
+    } else {
+      console.warn(`Failed to update record ${id} - record not found`);
     }
   }
 
@@ -188,71 +174,12 @@ export class BronzeService {
     }
 
     console.log(`Reprocessing ${filesToReprocess.length} failed files...`);
-    return await this.processor.processBatch(filesToReprocess);
+    return await this.processor.processBatch(filesToReprocess, this.database);
   }
 
   /**
    * Private helper methods for statistics calculation
    */
-  private countByStatus(): Record<ProcessingStatus, number> {
-    const counts: Record<ProcessingStatus, number> = {
-      pending: 0,
-      processing: 0,
-      processed: 0,
-      failed: 0,
-      quarantined: 0,
-      skipped: 0
-    };
-
-    for (const record of this.bronzeRecords.values()) {
-      counts[record.processing_status]++;
-    }
-
-    return counts;
-  }
-
-  private countByDataset(): Record<SourceDataset, number> {
-    const counts: Record<SourceDataset, number> = {
-      USNEWS_2024: 0,
-      USNEWS_2025: 0,
-      WAYBACK_ARCHIVE: 0,
-      OTHER: 0
-    };
-
-    for (const record of this.bronzeRecords.values()) {
-      if (record.source_dataset) {
-        counts[record.source_dataset]++;
-      }
-    }
-
-    return counts;
-  }
-
-  private countByPriority(): Record<PriorityBucket, number> {
-    const counts: Record<PriorityBucket, number> = {
-      bucket_1: 0,
-      bucket_2: 0,
-      bucket_3: 0,
-      unknown: 0
-    };
-
-    for (const record of this.bronzeRecords.values()) {
-      if (record.priority_bucket) {
-        counts[record.priority_bucket]++;
-      }
-    }
-
-    return counts;
-  }
-
-  private calculateAverageFileSize(): number {
-    if (this.bronzeRecords.size === 0) return 0;
-
-    const totalSize = Array.from(this.bronzeRecords.values())
-      .reduce((sum, record) => sum + record.file_size, 0);
-
-    return Math.round(totalSize / this.bronzeRecords.size);
-  }
 
   private calculateProcessingRate(): number {
     // This would calculate files per minute based on processing history
@@ -278,8 +205,10 @@ export class BronzeService {
   async shutdown(): Promise<void> {
     console.log('Shutting down Bronze Layer Service...');
     
-    // In a real implementation, this would:
-    // - Close database connections
+    // Close database connection
+    this.database.close();
+    
+    // In a real implementation, this would also:
     // - Stop processing workers  
     // - Save final statistics
     // - Clean up temporary resources
@@ -291,7 +220,7 @@ export class BronzeService {
 /**
  * Factory function to create Bronze service with default configuration
  */
-export function createBronzeService(overrides?: Partial<BronzeConfiguration>): BronzeService {
+export function createBronzeService(overrides?: Partial<BronzeConfiguration>, dbPath?: string): BronzeService {
   const defaultConfig: BronzeConfiguration = {
     source_directories: ['/Volumes/OWC Express 1M2/USNEWS_2024', '/Volumes/OWC Express 1M2/USNEWS_2025'],
     batch_size: 100,
@@ -302,5 +231,5 @@ export function createBronzeService(overrides?: Partial<BronzeConfiguration>): B
     ...overrides
   };
 
-  return new BronzeService(defaultConfig);
+  return new BronzeService(defaultConfig, dbPath);
 }

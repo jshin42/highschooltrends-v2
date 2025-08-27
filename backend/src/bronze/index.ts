@@ -8,6 +8,7 @@
 // Core service exports
 export { BronzeService, createBronzeService } from './bronze-service';
 export { BronzeFileProcessor } from './file-processor';
+export { BronzeDatabase } from './database';
 
 // Type exports
 export type {
