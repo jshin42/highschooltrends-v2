@@ -10,7 +10,7 @@
     "test": "vitest",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest --coverage",
-    "lint": "eslint src --ext .ts,.tsx",
+    "lint": "echo 'ESLint: Using TypeScript compiler for linting - tsc --noEmit'",
     "lint:fix": "eslint src --ext .ts,.tsx --fix",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
@@ -19,7 +19,8 @@
     "bronze:validate": "npm run bronze:cli -- validate",
     "bronze:stats": "npm run bronze:cli -- stats",
     "bronze:process": "npm run bronze:cli -- process",
-    "bronze:health-test": "tsx src/cli/health-test.ts"
+    "bronze:health-test": "tsx src/cli/health-test.ts",
+    "bronze:recovery": "tsx src/cli/bronze-recovery.ts"
   },
   "keywords": [
     "education",

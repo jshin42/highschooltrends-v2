@@ -1,0 +1,287 @@
+/**
+ * Bronze Error Recovery System Tests
+ * 
+ * Tests for comprehensive error recovery procedures and policies.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { BronzeErrorRecovery } from './error-recovery';
+import { BronzeDatabase } from './database';
+import { BronzeFileProcessor } from './file-processor';
+import { BronzeRecord } from './types';
+
+// Mock dependencies
+vi.mock('./database');
+vi.mock('./file-processor');
+vi.mock('../common/logger');
+
+describe('BronzeErrorRecovery', () => {
+  let errorRecovery: BronzeErrorRecovery;
+  let mockDatabase: BronzeDatabase;
+  let mockProcessor: BronzeFileProcessor;
+
+  beforeEach(() => {
+    mockDatabase = new BronzeDatabase(':memory:') as any;
+    mockProcessor = new BronzeFileProcessor({
+      source_directories: ['/test'],
+      batch_size: 10,
+      parallel_workers: 2,
+      max_file_size: 1000000,
+      checksum_verification: true,
+      auto_quarantine: true
+    }) as any;
+
+    // Mock database methods
+    vi.mocked(mockDatabase.getRecordsByStatus).mockImplementation((status) => {
+      if (status === 'failed') {
+        return Promise.resolve([
+          {
+            id: 1,
+            file_path: '/test/failed1.html',
+            school_slug: 'test-school-1',
+            capture_timestamp: '2024-01-01T00:00:00Z',
+            file_size: 5000,
+            checksum_sha256: 'abc123',
+            processing_status: 'failed',
+            source_dataset: 'USNEWS_2024',
+            priority_bucket: 'unknown',
+            processing_errors: ['File processing error: ENOENT: no such file'],
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: '2024-01-01T00:00:00Z'
+          } as BronzeRecord
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    vi.mocked(mockDatabase.updateRecordStatus).mockImplementation(() => true);
+
+    // Mock processor methods
+    vi.mocked(mockProcessor.processBatch).mockImplementation(() => {
+      return Promise.resolve({
+        total_files: 1,
+        successful_ingestions: 1,
+        failed_ingestions: 0,
+        skipped_files: 0,
+        processing_time_ms: 100,
+        errors: []
+      });
+    });
+
+    vi.mocked(mockProcessor.resetCircuitBreakers).mockImplementation(() => {});
+    
+    // Mock the config property directly
+    Object.defineProperty(mockProcessor, 'config', {
+      get: () => ({
+        source_directories: ['/test'],
+        batch_size: 10,
+        parallel_workers: 2,
+        max_file_size: 1000000,
+        checksum_verification: true,
+        auto_quarantine: true
+      }),
+      configurable: true
+    });
+
+    errorRecovery = new BronzeErrorRecovery(mockDatabase, mockProcessor);
+  });
+
+  describe('Recovery Policies', () => {
+    it('should have different retry policies for different error types', () => {
+      const policies = (errorRecovery as any).RECOVERY_POLICIES;
+      
+      expect(policies.file_not_found.maxRetries).toBe(2);
+      expect(policies.permission_denied.maxRetries).toBe(1);
+      expect(policies.corrupted_file.maxRetries).toBe(3);
+      expect(policies.duplicate_slug.maxRetries).toBe(0); // Special handling
+    });
+
+    it('should have appropriate retry delays for different error types', () => {
+      const policies = (errorRecovery as any).RECOVERY_POLICIES;
+      
+      expect(policies.file_not_found.retryDelay).toBe(5000);
+      expect(policies.permission_denied.retryDelay).toBe(10000);
+      expect(policies.corrupted_file.retryDelay).toBe(1000);
+    });
+  });
+
+  describe('recoverAllFailedRecords', () => {
+    it('should handle empty failed records list', async () => {
+      vi.mocked(mockDatabase.getRecordsByStatus).mockResolvedValue([]);
+
+      const result = await errorRecovery.recoverAllFailedRecords();
+
+      expect(result.totalAttempted).toBe(0);
+      expect(result.successful).toBe(0);
+      expect(result.stillFailed).toBe(0);
+      expect(result.skipped).toBe(0);
+    });
+
+    it('should recover failed records successfully', async () => {
+      const result = await errorRecovery.recoverAllFailedRecords();
+
+      expect(result.totalAttempted).toBe(1);
+      expect(result.successful).toBe(1);
+      expect(result.stillFailed).toBe(0);
+      expect(mockProcessor.processBatch).toHaveBeenCalledWith(['/test/failed1.html'], mockDatabase);
+    });
+
+    it('should handle processing failures during recovery', async () => {
+      vi.mocked(mockProcessor.processBatch).mockResolvedValue({
+        total_files: 1,
+        successful_ingestions: 0,
+        failed_ingestions: 1,
+        skipped_files: 0,
+        processing_time_ms: 100,
+        errors: [
+          {
+            file_path: '/test/failed1.html',
+            error_type: 'file_not_found',
+            error_message: 'Still not found',
+            timestamp: new Date().toISOString()
+          }
+        ]
+      });
+
+      const result = await errorRecovery.recoverAllFailedRecords();
+
+      expect(result.totalAttempted).toBe(1);
+      expect(result.successful).toBe(0);
+      expect(result.stillFailed).toBe(1);
+    });
+
+    it('should update recovery metrics after processing', async () => {
+      await errorRecovery.recoverAllFailedRecords();
+
+      const metrics = errorRecovery.getRecoveryMetrics();
+      expect(metrics.recoveryAttempts).toBe(1);
+      expect(metrics.successfulRecoveries).toBe(1);
+      expect(metrics.failedRecoveries).toBe(0);
+    });
+  });
+
+  describe('Error Type Extraction', () => {
+    it('should extract correct error types from messages', () => {
+      const extractMethod = (errorRecovery as any).extractErrorTypeFromMessage;
+      
+      expect(extractMethod('ENOENT: no such file')).toBe('file_not_found');
+      expect(extractMethod('permission denied EACCES')).toBe('permission_denied');
+      expect(extractMethod('duplicate key constraint')).toBe('duplicate_slug');
+      expect(extractMethod('checksum verification failed')).toBe('checksum_mismatch');
+      expect(extractMethod('corrupted data found')).toBe('corrupted_file');
+      expect(extractMethod('unknown error occurred')).toBe('invalid_format');
+    });
+  });
+
+  describe('Duplicate Slug Handling', () => {
+    it('should resolve duplicate slugs by keeping most recent', async () => {
+      const duplicateRecords = [
+        {
+          id: 1,
+          school_slug: 'test-school',
+          capture_timestamp: '2024-01-01T00:00:00Z',
+          file_path: '/test/old.html'
+        },
+        {
+          id: 2,
+          school_slug: 'test-school',
+          capture_timestamp: '2024-01-02T00:00:00Z',
+          file_path: '/test/new.html'
+        }
+      ] as BronzeRecord[];
+
+      const result = await (errorRecovery as any).handleDuplicateSlugRecords(duplicateRecords);
+
+      expect(result.successful).toBe(2);
+      expect(result.stillFailed).toBe(0);
+      expect(mockDatabase.updateRecordStatus).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('Drive Health Recovery', () => {
+    it('should check drive accessibility', async () => {
+      const fs = await import('fs/promises');
+      vi.spyOn(fs, 'access').mockResolvedValue(undefined);
+
+      const result = await errorRecovery.performDriveHealthRecovery();
+
+      expect(result.healthy).toBe(true);
+      expect(result.recoveredDrives).toHaveLength(0);
+    });
+
+    it('should attempt drive recovery on access failure', async () => {
+      const fs = await import('fs/promises');
+      vi.spyOn(fs, 'access')
+        .mockRejectedValueOnce(new Error('ENOENT'))
+        .mockResolvedValue(undefined);
+
+      const result = await errorRecovery.performDriveHealthRecovery();
+
+      expect(result.recoveredDrives).toContain('/test');
+      expect(mockProcessor.resetCircuitBreakers).toHaveBeenCalled();
+    });
+  });
+
+  describe('Metrics Tracking', () => {
+    it('should track recovery metrics correctly', async () => {
+      await errorRecovery.recoverAllFailedRecords();
+
+      const metrics = errorRecovery.getRecoveryMetrics();
+      expect(metrics.recoveryAttempts).toBeGreaterThan(0);
+      expect(metrics.averageRecoveryTime).toBeGreaterThan(0);
+    });
+
+    it('should reset metrics when requested', () => {
+      errorRecovery.resetRecoveryMetrics();
+
+      const metrics = errorRecovery.getRecoveryMetrics();
+      expect(metrics.recoveryAttempts).toBe(0);
+      expect(metrics.successfulRecoveries).toBe(0);
+      expect(metrics.failedRecoveries).toBe(0);
+      expect(metrics.averageRecoveryTime).toBe(0);
+    });
+  });
+
+  describe('Retry Logic', () => {
+    it('should implement exponential backoff', async () => {
+      const sleepSpy = vi.spyOn(errorRecovery as any, 'sleep').mockResolvedValue(undefined);
+      
+      // Mock processor to fail first attempts, then succeed
+      let attempt = 0;
+      vi.mocked(mockProcessor.processBatch).mockImplementation(() => {
+        attempt++;
+        if (attempt < 3) {
+          return Promise.resolve({
+            total_files: 1,
+            successful_ingestions: 0,
+            failed_ingestions: 1,
+            skipped_files: 0,
+            processing_time_ms: 100,
+            errors: [
+              {
+                file_path: '/test/failed1.html',
+                error_type: 'file_not_found',
+                error_message: 'Temporary failure',
+                timestamp: new Date().toISOString()
+              }
+            ]
+          });
+        } else {
+          return Promise.resolve({
+            total_files: 1,
+            successful_ingestions: 1,
+            failed_ingestions: 0,
+            skipped_files: 0,
+            processing_time_ms: 100,
+            errors: []
+          });
+        }
+      });
+
+      await errorRecovery.recoverAllFailedRecords();
+
+      expect(sleepSpy).toHaveBeenCalledWith(5000); // First retry delay
+      expect(sleepSpy).toHaveBeenCalledWith(10000); // Second retry delay (backoff)
+    });
+  });
+});

@@ -20,6 +20,7 @@ import { BronzeDatabase } from './database';
 import { createBronzeLogger, StructuredLogger } from '../common/logger';
 import { healthMonitor, ComponentHealth } from '../common/health';
 import { HealthServer, HealthServerOptions } from '../common/health-server';
+import { BronzeErrorRecovery, RecoveryResult } from './error-recovery';
 
 export class BronzeService {
   private processor: BronzeFileProcessor;
@@ -27,6 +28,7 @@ export class BronzeService {
   private database: BronzeDatabase;
   private logger: StructuredLogger;
   private healthServer?: HealthServer;
+  private errorRecovery: BronzeErrorRecovery;
   private processingStats: {
     totalProcessed: number;
     totalErrors: number;
@@ -44,6 +46,7 @@ export class BronzeService {
     });
     this.processor = new BronzeFileProcessor(config, this.logger);
     this.database = new BronzeDatabase(dbPath, this.logger);
+    this.errorRecovery = new BronzeErrorRecovery(this.database, this.processor);
     
     // Initialize processing statistics
     this.processingStats = {
@@ -256,7 +259,68 @@ export class BronzeService {
   }
 
   /**
-   * Reprocess failed or quarantined files
+   * Comprehensive error recovery for all failed records
+   */
+  async recoverAllErrors(): Promise<RecoveryResult> {
+    const timer = this.logger.startTimer('comprehensive-error-recovery');
+    const correlationId = StructuredLogger.generateCorrelationId();
+    
+    try {
+      this.logger.info('Starting comprehensive error recovery', { correlationId });
+      
+      const result = await this.errorRecovery.recoverAllFailedRecords();
+      
+      this.logger.metrics('Comprehensive error recovery completed', {
+        totalAttempted: result.totalAttempted,
+        successful: result.successful,
+        stillFailed: result.stillFailed,
+        skipped: result.skipped,
+        recoveryRate: result.totalAttempted > 0 ? (result.successful / result.totalAttempted) * 100 : 0,
+        recoveryTimeSeconds: Math.round(result.recoveryTime / 1000)
+      }, { correlationId });
+      
+      timer.end('Comprehensive error recovery completed successfully');
+      return result;
+    } catch (error) {
+      timer.endWithError(error as Error, 'Comprehensive error recovery failed');
+      throw error;
+    }
+  }
+
+  /**
+   * Perform drive health check and recovery
+   */
+  async recoverDriveHealth(): Promise<{ healthy: boolean; recoveredDrives: string[] }> {
+    const timer = this.logger.startTimer('drive-health-recovery');
+    
+    try {
+      this.logger.info('Starting drive health recovery');
+      
+      const result = await this.errorRecovery.performDriveHealthRecovery();
+      
+      this.logger.info('Drive health recovery completed', {
+        healthy: result.healthy,
+        recoveredDriveCount: result.recoveredDrives.length,
+        recoveredDrives: result.recoveredDrives
+      });
+      
+      timer.end('Drive health recovery completed');
+      return result;
+    } catch (error) {
+      timer.endWithError(error as Error, 'Drive health recovery failed');
+      throw error;
+    }
+  }
+
+  /**
+   * Get error recovery metrics
+   */
+  getErrorRecoveryMetrics() {
+    return this.errorRecovery.getRecoveryMetrics();
+  }
+
+  /**
+   * Reprocess failed or quarantined files (legacy method)
    */
   async reprocessFailedFiles(): Promise<BatchProcessingResult> {
     const timer = this.logger.startTimer('reprocess-failed-files');
@@ -431,6 +495,18 @@ export class BronzeService {
     healthMonitor.registerMetric('memory_usage_percentage', async (): Promise<number> => {
       const usage = process.memoryUsage();
       return Math.round((usage.heapUsed / usage.heapTotal) * 100);
+    });
+
+    // Register error recovery metrics
+    healthMonitor.registerMetric('error_recovery_success_rate', async (): Promise<number> => {
+      const metrics = this.errorRecovery.getRecoveryMetrics();
+      const totalAttempts = metrics.successfulRecoveries + metrics.failedRecoveries;
+      return totalAttempts > 0 ? (metrics.successfulRecoveries / totalAttempts) * 100 : 100;
+    });
+
+    healthMonitor.registerMetric('average_recovery_time_ms', async (): Promise<number> => {
+      const metrics = this.errorRecovery.getRecoveryMetrics();
+      return Math.round(metrics.averageRecoveryTime);
     });
 
     // Register circuit breaker metrics

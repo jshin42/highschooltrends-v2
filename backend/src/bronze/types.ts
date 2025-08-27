@@ -63,7 +63,7 @@ export interface BatchProcessingResult {
 
 export interface ProcessingError {
   file_path: string;
-  error_type: 'file_not_found' | 'permission_denied' | 'corrupted_file' | 'invalid_format' | 'duplicate_slug';
+  error_type: 'file_not_found' | 'permission_denied' | 'corrupted_file' | 'invalid_format' | 'duplicate_slug' | 'checksum_mismatch';
   error_message: string;
   timestamp: string;
 }
