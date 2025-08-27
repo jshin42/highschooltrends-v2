@@ -1,0 +1,50 @@
+{
+  "year": 2025,
+  "nces_id": null,
+  "usn_slug": "william-fremd-high-school-6921",
+  "name": "William Fremd High School",
+  "address": {
+    "street": "1000 S Quentin Rd",
+    "city": "Palatine",
+    "state": "Illinois",
+    "zip": ""
+  },
+  "phone": "(847) 755-2610",
+  "website": "http://adc.d211.org/Domain/9",
+  "grades": "9-12",
+  "enrollment": 2657,
+  "student_teacher_ratio": "16:1",
+  "national_rank": 397,
+  "state_rank": 14,
+  "ap_participation_rate": 62.0,
+  "ap_pass_rate": 56.0,
+  "math_proficiency": 64.0,
+  "reading_proficiency": 63.0,
+  "science_proficiency": 77.0,
+  "graduation_rate": 94.0,
+  "demographics": {
+    "white_pct": 45.3,
+    "asian_pct": 31.6,
+    "hispanic_pct": 14.0,
+    "black_pct": 4.7,
+    "two_or_more_pct": 4.1,
+    "american_indian_pct": 0.01
+  },
+  "gender": {
+    "female_pct": 49.0,
+    "male_pct": 51.0
+  },
+  "economically_disadvantaged_pct": null,
+  "free_lunch_pct": null,
+  "reduced_lunch_pct": null,
+  "college_readiness_index": 57.6,
+  "setting": "large suburb",
+  "full_time_teachers": 163,
+  "confidence_bucket": "verified",
+  "provenance": {
+    "source": "USNEWS",
+    "html_path": "file:///Volumes/OWC Express 1M2/USNEWS_2025/william-fremd-high-school-6921/docker_curl_20250821_061341.html",
+    "captured_at": "2025-08-21T06:13:41Z",
+    "checksum_sha256": "<will_be_calculated>"
+  }
+}
