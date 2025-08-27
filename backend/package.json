@@ -20,7 +20,8 @@
     "bronze:stats": "npm run bronze:cli -- stats",
     "bronze:process": "npm run bronze:cli -- process",
     "bronze:health-test": "tsx src/cli/health-test.ts",
-    "bronze:recovery": "tsx src/cli/bronze-recovery.ts"
+    "bronze:recovery": "tsx src/cli/bronze-recovery.ts",
+    "bronze:test-real": "npx tsx src/cli/test-real-files.ts"
   },
   "keywords": [
     "education",
