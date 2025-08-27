@@ -19,12 +19,15 @@ import {
   SourceDataset,
   PriorityBucket
 } from './types';
+import { StructuredLogger, createBronzeLogger } from '../common/logger';
 
 export class BronzeFileProcessor {
   private config: BronzeConfiguration;
+  private logger: StructuredLogger;
 
-  constructor(config: BronzeConfiguration) {
+  constructor(config: BronzeConfiguration, logger?: StructuredLogger) {
     this.config = config;
+    this.logger = logger || createBronzeLogger({ component: 'bronze-file-processor' });
   }
 
   /**
@@ -32,26 +35,45 @@ export class BronzeFileProcessor {
    * Returns array of file paths matching US News HTML pattern
    */
   async discoverFiles(): Promise<string[]> {
+    const timer = this.logger.startTimer('file-discovery');
     const allFiles: string[] = [];
     
-    for (const sourceDir of this.config.source_directories) {
-      try {
-        // Look for HTML files with docker_curl pattern in school-specific directories
-        const pattern = path.join(sourceDir, '**/docker_curl_*.html');
-        const files = await glob(pattern, {
-          absolute: true,
-          ignore: ['**/node_modules/**', '**/.*/**']
-        });
-        
-        allFiles.push(...files);
-        console.log(`Discovered ${files.length} HTML files in ${sourceDir}`);
-      } catch (error) {
-        console.error(`Error scanning directory ${sourceDir}:`, error);
-      }
-    }
+    try {
+      this.logger.info('Starting file discovery', {
+        sourceDirectories: this.config.source_directories
+      });
 
-    console.log(`Total files discovered: ${allFiles.length}`);
-    return allFiles;
+      for (const sourceDir of this.config.source_directories) {
+        try {
+          // Look for HTML files with docker_curl pattern in school-specific directories
+          const pattern = path.join(sourceDir, '**/docker_curl_*.html');
+          const files = await glob(pattern, {
+            absolute: true,
+            ignore: ['**/node_modules/**', '**/.*/**']
+          });
+          
+          allFiles.push(...files);
+          this.logger.info('Files discovered in directory', {
+            sourceDir,
+            fileCount: files.length,
+            pattern
+          });
+        } catch (error) {
+          this.logger.error('Error scanning directory', error as Error, { sourceDir });
+        }
+      }
+
+      this.logger.metrics('File discovery completed', {
+        totalFilesDiscovered: allFiles.length,
+        directoriesScanned: this.config.source_directories.length
+      });
+
+      timer.end('File discovery completed successfully');
+      return allFiles;
+    } catch (error) {
+      timer.endWithError(error as Error, 'File discovery failed');
+      throw error;
+    }
   }
 
   /**
@@ -195,8 +217,15 @@ export class BronzeFileProcessor {
    * Process a batch of HTML files and return Bronze records
    * This method handles the core ingestion logic
    */
-  async processBatch(filePaths: string[], database?: any): Promise<BatchProcessingResult> {
-    const startTime = Date.now();
+  async processBatch(filePaths: string[], database?: any, correlationId?: string, batchId?: string): Promise<BatchProcessingResult> {
+    const timer = this.logger.startTimer('batch-processing');
+    const context = {
+      correlationId,
+      batchId,
+      fileCount: filePaths.length,
+      parallelWorkers: this.config.parallel_workers
+    };
+    
     const result: BatchProcessingResult = {
       total_files: filePaths.length,
       successful_ingestions: 0,
@@ -206,12 +235,19 @@ export class BronzeFileProcessor {
       errors: []
     };
 
-    console.log(`Processing batch of ${filePaths.length} files...`);
+    this.logger.info('Starting batch processing', context);
 
     // Process files in parallel batches to avoid overwhelming the system
     const chunks = this.chunkArray(filePaths, this.config.parallel_workers);
     
     for (const chunk of chunks) {
+      const chunkTimer = this.logger.startTimer('chunk-processing');
+      this.logger.debug('Processing chunk', {
+        ...context,
+        chunkSize: chunk.length,
+        chunkIndex: chunks.indexOf(chunk)
+      });
+      
       const promises = chunk.map(async (filePath) => {
         try {
           const metadata = await this.extractMetadata(filePath);
@@ -223,7 +259,12 @@ export class BronzeFileProcessor {
               try {
                 database.insertRecord(bronzeRecord);
                 result.successful_ingestions++;
-                console.log(`✓ Processed: ${metadata.school_slug}`);
+                this.logger.debug('File processed successfully', {
+                  ...context,
+                  filePath,
+                  schoolSlug: metadata.school_slug,
+                  fileSize: metadata.file_size
+                });
                 return { success: true, record: bronzeRecord };
               } catch (dbError) {
                 // Handle database errors (e.g., duplicates)
@@ -235,12 +276,21 @@ export class BronzeFileProcessor {
                   timestamp: new Date().toISOString()
                 };
                 result.errors.push(error);
-                console.log(`✗ DB Error: ${filePath} - ${error.error_message}`);
+                this.logger.warn('Database error during file processing', {
+                  ...context,
+                  filePath,
+                  errorType: error.error_type,
+                  errorMessage: error.error_message
+                });
                 return { success: false, error };
               }
             } else {
               result.successful_ingestions++;
-              console.log(`✓ Processed: ${metadata.school_slug}`);
+              this.logger.debug('File processed successfully (no database)', {
+                ...context,
+                filePath,
+                schoolSlug: metadata.school_slug
+              });
               return { success: true, record: bronzeRecord };
             }
           } else {
@@ -268,7 +318,13 @@ export class BronzeFileProcessor {
               timestamp: new Date().toISOString()
             };
             result.errors.push(error);
-            console.log(`✗ Failed: ${filePath} - ${error.error_message}`);
+            this.logger.warn('File validation failed', {
+              ...context,
+              filePath,
+              errorType: error.error_type,
+              errorMessage: error.error_message,
+              validationErrors: metadata.validation_errors
+            });
             return { success: false, error };
           }
         } catch (error) {
@@ -292,19 +348,29 @@ export class BronzeFileProcessor {
             timestamp: new Date().toISOString()
           };
           result.errors.push(processingError);
-          console.log(`✗ Error: ${filePath} - ${processingError.error_message}`);
+          this.logger.error('File processing error', error as Error, {
+            ...context,
+            filePath,
+            errorType: processingError.error_type
+          });
           return { success: false, error: processingError };
         }
       });
 
       await Promise.all(promises);
+      chunkTimer.end('Chunk processing completed');
     }
 
-    result.processing_time_ms = Date.now() - startTime;
+    this.logger.metrics('Batch processing completed', {
+      totalFiles: result.total_files,
+      successful: result.successful_ingestions,
+      failed: result.failed_ingestions,
+      skipped: result.skipped_files,
+      successRate: result.total_files > 0 ? (result.successful_ingestions / result.total_files) * 100 : 0,
+      errorCount: result.errors.length
+    }, context);
     
-    console.log(`Batch processing completed in ${result.processing_time_ms}ms`);
-    console.log(`Success: ${result.successful_ingestions}, Failed: ${result.failed_ingestions}, Skipped: ${result.skipped_files}`);
-    
+    timer.end('Batch processing completed successfully');
     return result;
   }
 
@@ -322,42 +388,75 @@ export class BronzeFileProcessor {
   /**
    * Full pipeline: discover and process all files
    */
-  async processAllFiles(): Promise<BatchProcessingResult> {
-    console.log('Starting full Bronze layer processing...');
+  async processAllFiles(database?: any, correlationId?: string): Promise<BatchProcessingResult> {
+    const timer = this.logger.startTimer('full-dataset-processing');
+    const context = { correlationId, operation: 'process-all-files' };
     
-    const allFiles = await this.discoverFiles();
-    
-    if (allFiles.length === 0) {
-      console.log('No files found to process');
-      return {
-        total_files: 0,
-        successful_ingestions: 0,
-        failed_ingestions: 0,
-        skipped_files: 0,
-        processing_time_ms: 0,
-        errors: []
-      };
-    }
+    try {
+      this.logger.info('Starting full Bronze layer processing', context);
+      
+      const allFiles = await this.discoverFiles();
+      
+      if (allFiles.length === 0) {
+        this.logger.warn('No files found to process', context);
+        return {
+          total_files: 0,
+          successful_ingestions: 0,
+          failed_ingestions: 0,
+          skipped_files: 0,
+          processing_time_ms: 0,
+          errors: []
+        };
+      }
 
-    return await this.processBatch(allFiles);
+      this.logger.info('Starting batch processing of all discovered files', {
+        ...context,
+        totalFiles: allFiles.length
+      });
+
+      const result = await this.processBatch(allFiles, database, correlationId, 'full-dataset');
+      
+      timer.end('Full dataset processing completed successfully');
+      return result;
+    } catch (error) {
+      timer.endWithError(error as Error, 'Full dataset processing failed');
+      throw error;
+    }
   }
 
   /**
    * Validate configuration before processing
    */
   validateConfiguration(): void {
+    const configData = {
+      sourceDirectories: this.config.source_directories,
+      batchSize: this.config.batch_size,
+      parallelWorkers: this.config.parallel_workers,
+      maxFileSize: this.config.max_file_size,
+      checksumVerification: this.config.checksum_verification,
+      autoQuarantine: this.config.auto_quarantine
+    };
+    
+    this.logger.info('Validating Bronze layer configuration', configData);
+
     if (!this.config.source_directories || this.config.source_directories.length === 0) {
-      throw new Error('No source directories configured');
+      const error = new Error('No source directories configured');
+      this.logger.error('Configuration validation failed: no source directories', error, configData);
+      throw error;
     }
 
     if (this.config.batch_size <= 0) {
-      throw new Error('Batch size must be positive');
+      const error = new Error('Batch size must be positive');
+      this.logger.error('Configuration validation failed: invalid batch size', error, configData);
+      throw error;
     }
 
     if (this.config.parallel_workers <= 0) {
-      throw new Error('Parallel workers must be positive');
+      const error = new Error('Parallel workers must be positive');
+      this.logger.error('Configuration validation failed: invalid parallel workers', error, configData);
+      throw error;
     }
 
-    console.log('✓ Configuration validated');
+    this.logger.info('Configuration validated successfully', configData);
   }
 }

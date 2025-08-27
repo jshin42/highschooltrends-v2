@@ -17,16 +17,46 @@ import {
 } from './types';
 import { BronzeFileProcessor } from './file-processor';
 import { BronzeDatabase } from './database';
+import { createBronzeLogger, StructuredLogger } from '../common/logger';
+import { healthMonitor, ComponentHealth } from '../common/health';
+import { HealthServer, HealthServerOptions } from '../common/health-server';
 
 export class BronzeService {
   private processor: BronzeFileProcessor;
   private config: BronzeConfiguration;
   private database: BronzeDatabase;
+  private logger: StructuredLogger;
+  private healthServer?: HealthServer;
+  private processingStats: {
+    totalProcessed: number;
+    totalErrors: number;
+    processingTimes: number[];
+    startTime: number;
+  };
 
-  constructor(config: BronzeConfiguration, dbPath?: string) {
+  constructor(config: BronzeConfiguration, dbPath?: string, healthServerOptions?: HealthServerOptions) {
     this.config = config;
-    this.processor = new BronzeFileProcessor(config);
-    this.database = new BronzeDatabase(dbPath);
+    this.logger = createBronzeLogger({
+      operation: 'bronze-service',
+      sourceDirectories: config.source_directories.join(','),
+      batchSize: config.batch_size,
+      parallelWorkers: config.parallel_workers
+    });
+    this.processor = new BronzeFileProcessor(config, this.logger);
+    this.database = new BronzeDatabase(dbPath, this.logger);
+    
+    // Initialize processing statistics
+    this.processingStats = {
+      totalProcessed: 0,
+      totalErrors: 0,
+      processingTimes: [],
+      startTime: Date.now()
+    };
+    
+    // Initialize health server if options provided
+    if (healthServerOptions) {
+      this.healthServer = new HealthServer(healthServerOptions);
+    }
   }
 
   /**
@@ -34,17 +64,39 @@ export class BronzeService {
    * Validates configuration and sets up monitoring
    */
   async initialize(): Promise<void> {
-    console.log('Initializing Bronze Layer Service...');
+    const timer = this.logger.startTimer('service-initialization');
     
-    this.processor.validateConfiguration();
-    
-    // In a real implementation, this would:
-    // - Connect to database
-    // - Run schema migrations
-    // - Set up monitoring and alerting
-    // - Initialize processing queues
-    
-    console.log('✓ Bronze Layer Service initialized');
+    try {
+      this.logger.info('Initializing Bronze Layer Service', {
+        dbPath: this.database ? 'configured' : 'in-memory',
+        checksumVerification: this.config.checksum_verification,
+        autoQuarantine: this.config.auto_quarantine,
+        healthServerEnabled: !!this.healthServer
+      });
+      
+      // Validate configuration
+      this.processor.validateConfiguration();
+      this.logger.info('Configuration validated successfully');
+      
+      // Initialize database connection and run migrations
+      this.database.initialize();
+      this.logger.info('Database initialized successfully');
+      
+      // Register health checks and metrics
+      await this.registerHealthChecks();
+      this.logger.info('Health checks registered successfully');
+      
+      // Start health server if configured
+      if (this.healthServer) {
+        await this.healthServer.start();
+        this.logger.info('Health server started successfully');
+      }
+      
+      timer.end('Bronze Layer Service initialized successfully');
+    } catch (error) {
+      timer.endWithError(error as Error, 'Failed to initialize Bronze Layer Service');
+      throw error;
+    }
   }
 
   /**
@@ -52,21 +104,58 @@ export class BronzeService {
    * Orchestrates the entire Bronze layer pipeline
    */
   async processDataset(): Promise<BatchProcessingResult> {
-    console.log('Starting Bronze layer dataset processing...');
+    const timer = this.logger.startTimer('dataset-processing');
+    const correlationId = StructuredLogger.generateCorrelationId();
     
-    const result = await this.processor.processAllFiles();
-    
-    // Update statistics after processing
-    await this.updateStatistics();
-    
-    return result;
+    try {
+      this.logger.info('Starting Bronze layer dataset processing', { 
+        correlationId,
+        sourceDirectories: this.config.source_directories 
+      });
+      
+      const result = await this.processor.processAllFiles(this.database, correlationId);
+      
+      // Update health monitoring statistics
+      this.updateProcessingStats(result);
+      
+      // Update statistics after processing
+      await this.updateStatistics();
+      
+      this.logger.metrics('Dataset processing completed', {
+        totalFiles: result.total_files,
+        successful: result.successful_ingestions,
+        failed: result.failed_ingestions,
+        skipped: result.skipped_files,
+        successRate: result.total_files > 0 ? (result.successful_ingestions / result.total_files) * 100 : 0
+      }, { correlationId });
+      
+      timer.end('Dataset processing completed successfully');
+      return result;
+    } catch (error) {
+      timer.endWithError(error as Error, 'Dataset processing failed');
+      throw error;
+    }
   }
 
   /**
    * Process a specific batch of files
    */
   async processBatch(filePaths: string[]): Promise<BatchProcessingResult> {
-    return await this.processor.processBatch(filePaths, this.database);
+    const correlationId = StructuredLogger.generateCorrelationId();
+    const batchId = `batch-${Date.now()}`;
+    
+    this.logger.info('Processing file batch', {
+      correlationId,
+      batchId,
+      fileCount: filePaths.length
+    });
+    
+    const result = await this.processor.processBatch(filePaths, this.database, correlationId, batchId);
+    
+    // Update health monitoring statistics
+    this.updateProcessingStats(result);
+    
+    return result;
   }
 
   /**
@@ -143,11 +232,26 @@ export class BronzeService {
    * This would be called by the Silver layer when processing begins/completes
    */
   async updateRecordStatus(id: number, status: ProcessingStatus, errors?: string[]): Promise<void> {
-    const success = this.database.updateRecordStatus(id, status, errors);
-    if (success) {
-      console.log(`Updated record ${id} status to ${status}`);
-    } else {
-      console.warn(`Failed to update record ${id} - record not found`);
+    try {
+      const success = this.database.updateRecordStatus(id, status, errors);
+      if (success) {
+        this.logger.info('Record status updated successfully', {
+          recordId: id,
+          newStatus: status,
+          hasErrors: errors && errors.length > 0
+        });
+      } else {
+        this.logger.warn('Failed to update record status - record not found', {
+          recordId: id,
+          attemptedStatus: status
+        });
+      }
+    } catch (error) {
+      this.logger.error('Error updating record status', error as Error, {
+        recordId: id,
+        attemptedStatus: status
+      });
+      throw error;
     }
   }
 
@@ -155,26 +259,50 @@ export class BronzeService {
    * Reprocess failed or quarantined files
    */
   async reprocessFailedFiles(): Promise<BatchProcessingResult> {
-    const failedRecords = await this.getRecordsByStatus('failed');
-    const quarantinedRecords = await this.getRecordsByStatus('quarantined');
+    const timer = this.logger.startTimer('reprocess-failed-files');
+    const correlationId = StructuredLogger.generateCorrelationId();
     
-    const filesToReprocess = [...failedRecords, ...quarantinedRecords]
-      .map(record => record.file_path);
+    try {
+      const failedRecords = await this.getRecordsByStatus('failed');
+      const quarantinedRecords = await this.getRecordsByStatus('quarantined');
+      
+      const filesToReprocess = [...failedRecords, ...quarantinedRecords]
+        .map(record => record.file_path);
 
-    if (filesToReprocess.length === 0) {
-      console.log('No failed files to reprocess');
-      return {
-        total_files: 0,
-        successful_ingestions: 0,
-        failed_ingestions: 0,
-        skipped_files: 0,
-        processing_time_ms: 0,
-        errors: []
-      };
+      if (filesToReprocess.length === 0) {
+        this.logger.info('No failed files to reprocess', { correlationId });
+        return {
+          total_files: 0,
+          successful_ingestions: 0,
+          failed_ingestions: 0,
+          skipped_files: 0,
+          processing_time_ms: 0,
+          errors: []
+        };
+      }
+
+      this.logger.info('Starting reprocessing of failed files', {
+        correlationId,
+        failedCount: failedRecords.length,
+        quarantinedCount: quarantinedRecords.length,
+        totalToReprocess: filesToReprocess.length
+      });
+
+      const result = await this.processor.processBatch(filesToReprocess, this.database, correlationId);
+      
+      this.logger.metrics('Failed file reprocessing completed', {
+        totalFiles: result.total_files,
+        successful: result.successful_ingestions,
+        stillFailed: result.failed_ingestions,
+        recoveryRate: result.total_files > 0 ? (result.successful_ingestions / result.total_files) * 100 : 0
+      }, { correlationId });
+      
+      timer.end('Failed file reprocessing completed');
+      return result;
+    } catch (error) {
+      timer.endWithError(error as Error, 'Failed file reprocessing failed');
+      throw error;
     }
-
-    console.log(`Reprocessing ${filesToReprocess.length} failed files...`);
-    return await this.processor.processBatch(filesToReprocess, this.database);
   }
 
   /**
@@ -188,39 +316,183 @@ export class BronzeService {
   }
 
   private async updateStatistics(): Promise<void> {
-    // This would update persistent statistics storage
-    // For now, we'll just log current stats
-    const stats = await this.getStatistics();
-    console.log('Bronze Layer Statistics Updated:', {
-      total_files: stats.total_files_discovered,
-      pending: stats.files_by_status.pending,
-      processed: stats.files_by_status.processed,
-      failed: stats.files_by_status.failed
+    try {
+      // This would update persistent statistics storage
+      // For now, we'll just log current stats
+      const stats = await this.getStatistics();
+      
+      this.logger.metrics('Bronze Layer Statistics Updated', {
+        totalFilesDiscovered: stats.total_files_discovered,
+        pendingFiles: stats.files_by_status.pending,
+        processedFiles: stats.files_by_status.processed,
+        failedFiles: stats.files_by_status.failed,
+        quarantinedFiles: stats.files_by_status.quarantined,
+        avgFileSize: stats.average_file_size,
+        processingRate: stats.processing_rate
+      });
+      
+      // In production, this would also:
+      // - Update metrics in time-series database
+      // - Update dashboard data
+      // - Check SLA thresholds and alert if needed
+    } catch (error) {
+      this.logger.error('Failed to update statistics', error as Error);
+    }
+  }
+
+  /**
+   * Register health checks and metrics collectors
+   */
+  private async registerHealthChecks(): Promise<void> {
+    // Register database health check
+    healthMonitor.registerComponent('database', async (): Promise<ComponentHealth> => {
+      try {
+        const totalRecords = this.database.getTotalCount();
+        return {
+          name: 'database',
+          status: 'operational',
+          message: `Database operational with ${totalRecords} records`,
+          metrics: {
+            total_records: totalRecords,
+            connection_pool_size: 1 // SQLite is single connection
+          },
+          last_checked: new Date().toISOString()
+        };
+      } catch (error) {
+        return {
+          name: 'database',
+          status: 'failed',
+          message: `Database error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          last_checked: new Date().toISOString()
+        };
+      }
     });
+
+    // Register external drive health check
+    healthMonitor.registerComponent('external_drives', async (): Promise<ComponentHealth> => {
+      try {
+        const fs = await import('fs/promises');
+        let allDrivesOk = true;
+        let driveMessages: string[] = [];
+        
+        for (const directory of this.config.source_directories) {
+          try {
+            await fs.access(directory);
+            driveMessages.push(`${directory}: accessible`);
+          } catch (error) {
+            allDrivesOk = false;
+            driveMessages.push(`${directory}: ${error instanceof Error ? error.message : 'inaccessible'}`);
+          }
+        }
+        
+        return {
+          name: 'external_drives',
+          status: allDrivesOk ? 'operational' : 'degraded',
+          message: driveMessages.join(', '),
+          metrics: {
+            total_directories: this.config.source_directories.length,
+            accessible_directories: allDrivesOk ? this.config.source_directories.length : 0
+          },
+          last_checked: new Date().toISOString()
+        };
+      } catch (error) {
+        return {
+          name: 'external_drives',
+          status: 'failed',
+          message: `External drive check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          last_checked: new Date().toISOString()
+        };
+      }
+    });
+
+    // Register metrics collectors
+    healthMonitor.registerMetric('processing_rate_files_per_min', async (): Promise<number> => {
+      const uptimeMinutes = (Date.now() - this.processingStats.startTime) / 60000;
+      return uptimeMinutes > 0 ? (this.processingStats.totalProcessed / uptimeMinutes) : 0;
+    });
+
+    healthMonitor.registerMetric('error_rate_percentage', async (): Promise<number> => {
+      const total = this.processingStats.totalProcessed + this.processingStats.totalErrors;
+      return total > 0 ? (this.processingStats.totalErrors / total) * 100 : 0;
+    });
+
+    healthMonitor.registerMetric('p95_processing_time_ms', async (): Promise<number> => {
+      if (this.processingStats.processingTimes.length === 0) return 0;
+      const sorted = [...this.processingStats.processingTimes].sort((a, b) => a - b);
+      const p95Index = Math.floor(sorted.length * 0.95);
+      return sorted[p95Index] || 0;
+    });
+
+    healthMonitor.registerMetric('memory_usage_mb', async (): Promise<number> => {
+      const usage = process.memoryUsage();
+      return Math.round(usage.heapUsed / 1024 / 1024);
+    });
+
+    healthMonitor.registerMetric('memory_usage_percentage', async (): Promise<number> => {
+      const usage = process.memoryUsage();
+      return Math.round((usage.heapUsed / usage.heapTotal) * 100);
+    });
+  }
+
+  /**
+   * Update processing statistics for health monitoring
+   */
+  private updateProcessingStats(result: BatchProcessingResult): void {
+    this.processingStats.totalProcessed += result.successful_ingestions;
+    this.processingStats.totalErrors += result.failed_ingestions;
+    
+    // Track processing time for percentile calculations
+    if (this.processingStats.processingTimes.length > 1000) {
+      // Keep only the most recent 1000 processing times to prevent memory growth
+      this.processingStats.processingTimes = this.processingStats.processingTimes.slice(-500);
+    }
+    this.processingStats.processingTimes.push(result.processing_time_ms);
   }
 
   /**
    * Cleanup and shutdown procedures
    */
   async shutdown(): Promise<void> {
-    console.log('Shutting down Bronze Layer Service...');
+    const timer = this.logger.startTimer('service-shutdown');
     
-    // Close database connection
-    this.database.close();
-    
-    // In a real implementation, this would also:
-    // - Stop processing workers  
-    // - Save final statistics
-    // - Clean up temporary resources
-    
-    console.log('✓ Bronze Layer Service shut down');
+    try {
+      this.logger.info('Shutting down Bronze Layer Service');
+      
+      // Stop health server if running
+      if (this.healthServer?.isRunning()) {
+        await this.healthServer.stop();
+        this.logger.info('Health server stopped');
+      }
+      
+      // Update final statistics
+      await this.updateStatistics();
+      
+      // Close database connection
+      this.database.close();
+      this.logger.info('Database connection closed');
+      
+      // In a real implementation, this would also:
+      // - Stop processing workers gracefully
+      // - Wait for in-flight operations to complete
+      // - Clean up temporary resources
+      // - Flush logs and metrics
+      
+      timer.end('Bronze Layer Service shut down successfully');
+    } catch (error) {
+      timer.endWithError(error as Error, 'Error during Bronze Layer Service shutdown');
+      throw error;
+    }
   }
 }
 
 /**
  * Factory function to create Bronze service with default configuration
  */
-export function createBronzeService(overrides?: Partial<BronzeConfiguration>, dbPath?: string): BronzeService {
+export function createBronzeService(
+  overrides?: Partial<BronzeConfiguration>, 
+  dbPath?: string, 
+  healthServerOptions?: HealthServerOptions
+): BronzeService {
   const defaultConfig: BronzeConfiguration = {
     source_directories: ['/Volumes/OWC Express 1M2/USNEWS_2024', '/Volumes/OWC Express 1M2/USNEWS_2025'],
     batch_size: 100,
@@ -231,5 +503,23 @@ export function createBronzeService(overrides?: Partial<BronzeConfiguration>, db
     ...overrides
   };
 
-  return new BronzeService(defaultConfig, dbPath);
+  return new BronzeService(defaultConfig, dbPath, healthServerOptions);
+}
+
+/**
+ * Create Bronze service with health monitoring enabled
+ */
+export function createBronzeServiceWithHealth(
+  overrides?: Partial<BronzeConfiguration>,
+  dbPath?: string,
+  healthPort: number = 3001
+): BronzeService {
+  const healthServerOptions: HealthServerOptions = {
+    port: healthPort,
+    host: '0.0.0.0', // Listen on all interfaces for production
+    enableCors: true,
+    maxRequestTime: 30000
+  };
+
+  return createBronzeService(overrides, dbPath, healthServerOptions);
 }

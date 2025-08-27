@@ -9,24 +9,48 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
 import { BronzeRecord, ProcessingStatus, SourceDataset, PriorityBucket } from './types';
+import { StructuredLogger, createBronzeLogger } from '../common/logger';
 
 export class BronzeDatabase {
   private db: Database.Database;
+  private logger: StructuredLogger;
 
-  constructor(dbPath?: string) {
+  constructor(dbPath?: string, logger?: StructuredLogger) {
+    this.logger = logger || createBronzeLogger({ component: 'bronze-database' });
+    
     // Use in-memory database for tests, file-based for production
     const dbFile = dbPath || path.join(process.cwd(), 'data', 'bronze.sqlite');
+    
+    this.logger.info('Initializing Bronze database', {
+      dbPath: dbPath || 'default',
+      isInMemory: dbPath === ':memory:'
+    });
     
     // Ensure data directory exists for file-based databases
     if (dbPath !== ':memory:') {
       const dbDir = path.dirname(dbFile);
       if (!fs.existsSync(dbDir)) {
         fs.mkdirSync(dbDir, { recursive: true });
+        this.logger.info('Created database directory', { dbDir });
       }
     }
 
     this.db = new Database(dbFile);
-    this.initializeSchema();
+  }
+
+  /**
+   * Initialize database connection and schema
+   */
+  initialize(): void {
+    const timer = this.logger.startTimer('database-initialization');
+    
+    try {
+      this.initializeSchema();
+      timer.end('Database initialized successfully');
+    } catch (error) {
+      timer.endWithError(error as Error, 'Failed to initialize database');
+      throw error;
+    }
   }
 
   /**
@@ -58,9 +82,22 @@ export class BronzeDatabase {
       'CREATE INDEX IF NOT EXISTS idx_bronze_priority ON bronze_records(priority_bucket)'
     ];
 
-    // Execute schema creation
-    this.db.exec(createTableSQL);
-    createIndexes.forEach(indexSQL => this.db.exec(indexSQL));
+    try {
+      // Execute schema creation
+      this.db.exec(createTableSQL);
+      this.logger.info('Bronze records table created/verified');
+      
+      createIndexes.forEach((indexSQL, index) => {
+        this.db.exec(indexSQL);
+      });
+      this.logger.info('Database indexes created/verified', { 
+        indexCount: createIndexes.length 
+      });
+      
+    } catch (error) {
+      this.logger.error('Failed to initialize database schema', error as Error);
+      throw error;
+    }
   }
 
   /**

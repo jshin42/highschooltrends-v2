@@ -18,7 +18,8 @@
     "bronze:test": "npm run bronze:cli -- test",
     "bronze:validate": "npm run bronze:cli -- validate",
     "bronze:stats": "npm run bronze:cli -- stats",
-    "bronze:process": "npm run bronze:cli -- process"
+    "bronze:process": "npm run bronze:cli -- process",
+    "bronze:health-test": "tsx src/cli/health-test.ts"
   },
   "keywords": [
     "education",
