@@ -37,9 +37,16 @@ export interface SilverRecord {
   student_teacher_ratio: string | null;  // e.g., "16:1"
   full_time_teachers: number | null;
   
-  // Rankings
-  national_rank: number | null;
-  state_rank: number | null;
+  // Rankings (Enhanced to support ranges and precision indicators)
+  national_rank: number | null;           // Primary rank (exact or range start)
+  national_rank_end: number | null;       // Range end for Bucket 2 schools (#13,427-17,901)
+  national_rank_precision: RankingPrecision | null;  // Exact, range, or estimated
+  state_rank: number | null;              // Primary state rank
+  state_rank_precision: RankingPrecision | null;     // Precision indicator for state rank
+  
+  // Unranked status tracking
+  is_unranked: boolean | null;            // Explicitly marked as unranked
+  unranked_reason: string | null;         // Reason for unranked status
   
   // Academic Performance
   ap_participation_rate: number | null;  // Percentage
@@ -82,15 +89,54 @@ export type ExtractionStatus =
   | 'partial';       // Partial extraction (some fields missing)
 
 /**
+ * Ranking precision indicators for enhanced parsing
+ */
+export type RankingPrecision = 
+  | 'exact'          // Exact rank (Bucket 1: #1-13,426)
+  | 'range'          // Range estimate (Bucket 2: #13,427-17,901)
+  | 'estimated'      // ML estimated (Bucket 3: state-only or unranked)
+  | 'state_only';    // Only has state ranking, no national
+
+/**
  * Confidence scores for individual fields (0-100)
  */
 export interface FieldConfidence {
+  // High-level grouped confidences
   school_name: number;
   rankings: number;           // Combined national_rank + state_rank confidence
   academics: number;          // Combined academic performance metrics
   demographics: number;       // Combined demographic percentages
   location: number;           // Combined address fields
   enrollment_data: number;    // enrollment + student_teacher_ratio + teachers
+  
+  // Individual field confidences (optional for backward compatibility)
+  national_rank?: number;
+  state_rank?: number;
+  ap_participation_rate?: number;
+  ap_pass_rate?: number;
+  math_proficiency?: number;
+  reading_proficiency?: number;
+  science_proficiency?: number;
+  graduation_rate?: number;
+  college_readiness_index?: number;
+  white_pct?: number;
+  asian_pct?: number;
+  hispanic_pct?: number;
+  black_pct?: number;
+  american_indian_pct?: number;
+  two_or_more_pct?: number;
+  female_pct?: number;
+  male_pct?: number;
+  address_street?: number;
+  address_city?: number;
+  address_state?: number;
+  address_zip?: number;
+  phone?: number;
+  website?: number;
+  setting?: number;
+  enrollment?: number;
+  student_teacher_ratio?: number;
+  full_time_teachers?: number;
 }
 
 export interface ExtractionError {
@@ -115,6 +161,18 @@ export type ExtractionMethod =
   | 'regex_pattern'
   | 'manual_rule'
   | 'fallback_heuristic';
+
+/**
+ * Abstract base class for all extraction methods
+ */
+export interface IExtractionMethod {
+  extract(html: string, context: ExtractionContext): Promise<{
+    data: Partial<SilverRecord>;
+    confidence: number;
+    fieldConfidences: Partial<FieldConfidence>;
+    errors: ExtractionError[];
+  }>;
+}
 
 /**
  * Multi-tier HTML extraction configuration
