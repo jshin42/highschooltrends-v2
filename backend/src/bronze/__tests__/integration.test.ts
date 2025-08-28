@@ -19,6 +19,7 @@ describe('Bronze Layer Integration Tests', () => {
   beforeEach(() => {
     // Create service with in-memory database for isolation
     database = new BronzeDatabase(testDbPath);
+    database.initialize(); // CRITICAL: Initialize schema for tests
     service = createBronzeService({
       source_directories: ['/Volumes/OWC Express 1M2/USNEWS_2024', '/Volumes/OWC Express 1M2/USNEWS_2025'],
       batch_size: 10,

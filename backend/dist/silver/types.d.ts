@@ -77,6 +77,17 @@ export interface ExtractionError {
 export type ExtractionErrorType = 'css_selector_failed' | 'regex_failed' | 'manual_rule_failed' | 'data_validation_failed' | 'parse_error' | 'missing_dom_element' | 'ambiguous_data';
 export type ExtractionMethod = 'css_selector' | 'regex_pattern' | 'manual_rule' | 'fallback_heuristic';
 /**
+ * Abstract base class for all extraction methods
+ */
+export interface IExtractionMethod {
+    extract(html: string, context: ExtractionContext): Promise<{
+        data: Partial<SilverRecord>;
+        confidence: number;
+        fieldConfidences: Partial<FieldConfidence>;
+        errors: ExtractionError[];
+    }>;
+}
+/**
  * Multi-tier HTML extraction configuration
  */
 export interface SilverExtractionPipeline {

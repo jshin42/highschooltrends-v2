@@ -1,0 +1,59 @@
+{
+  "samples": [
+    {
+      "schoolSlug": "abilene-high-school-7885",
+      "schoolName": "Abilene High School",
+      "extractedNationalRank": 152,
+      "extractedStateRank": 89,
+      "extractedBucket": 1,
+      "confidence": 86,
+      "isUnranked": false,
+      "htmlPath": "/Volumes/OWC Express 1M2/USNEWS_2024/abilene-high-school-7885/docker_curl_20250819_003527.html",
+      "usNewsUrl": "https://www.usnews.com/education/best-high-schools/south-carolina/districts/charleston-county-school-district-106145/abilene-high-school-7885"
+    },
+    {
+      "schoolSlug": "fabius-pompey-middle-school-high-school-13672",
+      "schoolName": "Fabius-Pompey Middle School High School",
+      "extractedNationalRank": 11,
+      "extractedStateRank": 249,
+      "extractedBucket": 1,
+      "confidence": 86,
+      "isUnranked": false,
+      "htmlPath": "/Volumes/OWC Express 1M2/USNEWS_2024/fabius-pompey-middle-school-high-school-13672/docker_curl_20250818_194838.html",
+      "usNewsUrl": "https://www.usnews.com/education/best-high-schools/south-carolina/districts/charleston-county-school-district-106145/fabius-pompey-middle-school-high-school-13672"
+    },
+    {
+      "schoolSlug": "napoleon-junior-senior-high-school-15269",
+      "schoolName": "Napoleon Junior/Senior High School",
+      "extractedNationalRank": 41,
+      "extractedStateRank": 137,
+      "extractedBucket": 1,
+      "confidence": 86,
+      "isUnranked": false,
+      "htmlPath": "/Volumes/OWC Express 1M2/USNEWS_2024/napoleon-junior-senior-high-school-15269/docker_curl_20250818_210124.html",
+      "usNewsUrl": "https://www.usnews.com/education/best-high-schools/south-carolina/districts/charleston-county-school-district-106145/napoleon-junior-senior-high-school-15269"
+    },
+    {
+      "schoolSlug": "tantasqua-regional-vocational-9533",
+      "schoolName": "Tantasqua Regional Vocational",
+      "extractedNationalRank": 13427,
+      "extractedStateRank": 1,
+      "extractedBucket": 2,
+      "confidence": 90,
+      "isUnranked": false,
+      "htmlPath": "/Volumes/OWC Express 1M2/USNEWS_2024/tantasqua-regional-vocational-9533/docker_curl_20250819_044734.html",
+      "usNewsUrl": "https://www.usnews.com/education/best-high-schools/south-carolina/districts/charleston-county-school-district-106145/tantasqua-regional-vocational-9533"
+    }
+  ],
+  "bucketDistribution": {
+    "Bucket 1": 3,
+    "Bucket 2": 1
+  },
+  "confidenceStats": {
+    "average": 87,
+    "min": 86,
+    "max": 90,
+    "belowThreshold": 0
+  },
+  "timestamp": "2025-08-28T01:58:10.065Z"
+}

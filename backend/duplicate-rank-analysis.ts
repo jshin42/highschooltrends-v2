@@ -207,7 +207,7 @@ async function main() {
   console.log('🔍 Starting comprehensive duplicate rank analysis...\n');
   
   const dataDir = '/Volumes/OWC Express 1M2/USNEWS_2024';
-  const schools = await analyzeDataset(dataDir, 100); // Reduced to 100 schools for faster debug
+  const schools = await analyzeDataset(dataDir, 1000); // Scale testing to 1000+ schools (5% coverage)
   
   if (schools.length === 0) {
     console.error('No schools found to analyze!');

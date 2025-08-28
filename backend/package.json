@@ -21,7 +21,12 @@
     "bronze:process": "npm run bronze:cli -- process",
     "bronze:health-test": "tsx src/cli/health-test.ts",
     "bronze:recovery": "tsx src/cli/bronze-recovery.ts",
-    "bronze:test-real": "npx tsx src/cli/test-real-files.ts"
+    "bronze:test-real": "npx tsx src/cli/test-real-files.ts",
+    "silver:cli": "tsx src/cli/silver-cli.ts",
+    "silver:test": "npm run silver:cli -- test",
+    "silver:validate": "npm run silver:cli -- validate",
+    "silver:stats": "npm run silver:cli -- stats",
+    "silver:extract": "npm run silver:cli -- extract"
   },
   "keywords": [
     "education",
@@ -37,12 +42,14 @@
     "better-sqlite3": "^9.0.0",
     "commander": "^11.0.0",
     "glob": "^10.0.0",
+    "jsdom": "^24.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.8",
     "@types/glob": "^8.0.0",
+    "@types/jsdom": "^21.0.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "eslint": "^8.0.0",

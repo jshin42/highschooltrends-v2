@@ -35,8 +35,9 @@ interface ParsedRanking {
 export class CSSExtractionMethod extends BaseExtractionMethod {
   // Complete CSS selectors for ALL gold standard fields
   private static readonly SELECTORS = {
-    // School name patterns (priority order)
+    // School name patterns (priority order) - JSON-LD FIRST
     school_name: [
+      'script[type="application/ld+json"]', // PRIMARY: Extract from JSON-LD structured data
       'h1[data-testid="school-name"]',
       '.school-profile-header h1',
       'h1.profile-header-name',
@@ -52,33 +53,38 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
       '.school-id'
     ],
     
-    // Address patterns (complete)
+    // Address patterns - JSON-LD FIRST
     address_street: [
+      'script[type="application/ld+json"]', // PRIMARY: Extract from JSON-LD
       '[data-testid="school-address-street"]',
       '.school-address .street',
       '.address-line-1'
     ],
     
     address_city: [
+      'script[type="application/ld+json"]', // PRIMARY: Extract from JSON-LD
       '[data-testid="school-city"]',
       '.school-location .city',
       '.address-city'
     ],
     
     address_state: [
+      'script[type="application/ld+json"]', // PRIMARY: Extract from JSON-LD
       '[data-testid="school-state"]',
       '.school-location .state',
       '.address-state'
     ],
     
     address_zip: [
+      'script[type="application/ld+json"]', // PRIMARY: Extract from JSON-LD
       '[data-testid="school-zip"]',
       '.school-location .zip',
       '.address-zip'
     ],
     
-    // Contact information
+    // Contact information - JSON-LD FIRST
     phone: [
+      'script[type="application/ld+json"]', // PRIMARY: Extract from JSON-LD
       '[data-testid="school-phone"]',
       '.school-contact .phone',
       '.phone-number'
@@ -90,21 +96,25 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
       '.website-link'
     ],
     
-    // School characteristics  
-    grades: [
+    // School characteristics - grades served with data-test-id FIRST
+    grades_served: [
+      '[data-test-id="g_grades_served"]',    // PRIMARY: Working data-test-id (found "9-12")
+      'body',                                // SECONDARY: Extract via regex pattern from body text
       '[data-testid="grades-served"]',
       '.grades-served',
       '.school-grades'
     ],
     
     setting: [
+      '[data-test-id="ulocal"]',            // PRIMARY: Working data-test-id (found "Large Suburb")
       '[data-testid="school-setting"]',
       '.school-setting',
       '.location-type'
     ],
     
-    // Enrollment patterns
+    // Enrollment patterns - data-test-id FIRST
     enrollment: [
+      '[data-test-id="ccd_member"]',        // PRIMARY: Working data-test-id (found "2,657")
       '[data-testid="enrollment-number"]',
       '.enrollment-stats .number',
       '.student-body-size',
@@ -112,12 +122,14 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
     ],
     
     student_teacher_ratio: [
+      '[data-test-id="student_teacher_ratio_rounded"]', // PRIMARY: Working data-test-id (found "16:1")
       '[data-testid="student-teacher-ratio"]',
       '.ratio-display',
       '.teacher-ratio'
     ],
     
     full_time_teachers: [
+      '[data-test-id="fte"]',               // PRIMARY: Working data-test-id (found "163")
       '[data-testid="teacher-count"]',
       '.teacher-stats .count',
       '.full-time-teachers'
@@ -137,6 +149,7 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
     ],
     
     state_rank: [
+      'a[href*="/illinois/rankings"] .with-icon__Rank-sc-1spb2w-2', // PRIMARY: State-specific ranking link
       '#rankings_section',                      // Rankings section container (contains full context)
       '.RankingList__RankStyled-sc-7e61t7-1',  // Same elements contain both national and state
       '.with-icon__Rank-sc-1spb2w-2',         // Alternative ranking display
@@ -147,44 +160,51 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
       '.rank-display.state'                    // Legacy fallback
     ],
     
-    // Academic performance patterns
+    // Academic performance patterns - WORKING data-test-id selectors FIRST
     ap_participation_rate: [
+      '[data-test-id="participation_rate"]',   // PRIMARY: Working data-test-id selector (98% confidence)
       '[data-testid="ap-participation"]',
       '.ap-stats .participation',
       '.advanced-placement .participation'
     ],
     
     ap_pass_rate: [
+      '[data-test-id="participant_passing_rate"]', // PRIMARY: Working data-test-id selector (98% confidence)
       '[data-testid="ap-pass-rate"]',
       '.ap-stats .pass-rate',
       '.advanced-placement .pass-rate'
     ],
     
     math_proficiency: [
+      '[data-test-id="school_percent_proficient_in_math"]', // PRIMARY: Working data-test-id selector (98% confidence)
       '[data-testid="math-proficiency"]',
       '.proficiency-math',
       '.academic-performance .math'
     ],
     
     reading_proficiency: [
+      '[data-test-id="school_percent_proficient_in_english"]', // PRIMARY: Working data-test-id selector (98% confidence)
       '[data-testid="reading-proficiency"]',
       '.proficiency-reading',
       '.academic-performance .reading'
     ],
     
     science_proficiency: [
+      '[data-test-id="school_percent_proficient_in_science"]', // PRIMARY: Working data-test-id selector (98% confidence)
       '[data-testid="science-proficiency"]',
       '.proficiency-science',
       '.academic-performance .science'
     ],
     
     graduation_rate: [
+      '[data-test-id="gradrate"]',              // PRIMARY: Working data-test-id selector (98% confidence)
       '[data-testid="graduation-rate"]',
       '.graduation-stats .rate',
       '.graduation-percentage'
     ],
     
     college_readiness_index: [
+      '[data-test-id="ranknat_cri"]',           // PRIMARY: Working data-test-id selector (partial - gives rank)
       '[data-testid="college-readiness"]',
       '.college-readiness-score',
       '.readiness-index'
@@ -1114,8 +1134,23 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
   }
 
   private extractGrades(document: Document): { value: string | null; confidence: number; error?: ExtractionError } {
-    for (const selector of CSSExtractionMethod.SELECTORS.grades) {
+    // First, try the working regex pattern from gold standard analysis (80% confidence)
+    const bodyText = document.body?.textContent || '';
+    const gradesPattern = /(?:grades?|serving)\s*(?:levels?)?\s*:?\s*((\d+)(?:\s*-\s*\d+)?)/i;
+    const gradesMatch = bodyText.match(gradesPattern);
+    if (gradesMatch) {
+      const grades = gradesMatch[1].trim();
+      if (/^(K|PK|\d{1,2})(-\d{1,2})?$/.test(grades)) {
+        return { value: grades, confidence: 80 }; // Gold standard validated confidence
+      }
+    }
+    
+    // Fallback to CSS selectors
+    for (const selector of CSSExtractionMethod.SELECTORS.grades_served) {
       try {
+        // Skip the body selector since we already processed it above
+        if (selector === 'body') continue;
+        
         const element = document.querySelector(selector);
         if (element) {
           const text = element.textContent?.trim();
@@ -1131,7 +1166,7 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
     return {
       value: null,
       confidence: 0,
-      error: this.createError('grades_served', 'css_selector_failed', 'No grades found with CSS selectors', 'css_selector')
+      error: this.createError('grades_served', 'css_selector_failed', 'No grades found with pattern matching or CSS selectors', 'css_selector')
     };
   }
 

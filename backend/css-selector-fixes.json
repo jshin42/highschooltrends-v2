@@ -1,0 +1,297 @@
+{
+  "timestamp": "2025-08-28T12:18:20.430Z",
+  "source_file": "/Volumes/OWC Express 1M2/USNEWS_2025/william-fremd-high-school-6921/docker_curl_20250821_061341.html",
+  "gold_standard": {
+    "school_name": "William Fremd High School",
+    "address_street": "1000 S Quentin Rd",
+    "address_city": "Palatine",
+    "address_state": "Illinois",
+    "address_zip": "60067",
+    "phone": "(847) 755-2610",
+    "website": "http://adc.d211.org/Domain/9",
+    "grades_served": "9-12",
+    "enrollment": 2657,
+    "student_teacher_ratio": "16:1",
+    "full_time_teachers": 163,
+    "national_rank": 397,
+    "state_rank": 14,
+    "ap_participation_rate": 62,
+    "ap_pass_rate": 56,
+    "math_proficiency": 64,
+    "reading_proficiency": 63,
+    "science_proficiency": 77,
+    "graduation_rate": 94,
+    "college_readiness_index": 57.6,
+    "white_pct": 45.3,
+    "asian_pct": 31.6,
+    "hispanic_pct": 14,
+    "black_pct": 4.7,
+    "two_or_more_pct": 4.1,
+    "american_indian_pct": 0.01,
+    "female_pct": 49,
+    "male_pct": 51,
+    "economically_disadvantaged_pct": null,
+    "free_lunch_pct": null,
+    "reduced_lunch_pct": null,
+    "setting": "large suburb"
+  },
+  "total_fields": 30,
+  "fixes_generated": 15,
+  "success_rate": 50,
+  "fixes": [
+    {
+      "field": "school_name",
+      "category": "basic",
+      "currentSelectors": [
+        "h1[data-testid=\"school-name\"]",
+        ".school-profile-header h1",
+        "h1.profile-header-name"
+      ],
+      "newSelectors": [
+        "script[type=\"application/ld+json\"]"
+      ],
+      "expectedValue": "William Fremd High School",
+      "actualValue": "William Fremd High School",
+      "confidence": 98,
+      "source": "json-ld",
+      "notes": "Extract from JSON-LD structured data: jsonData.name"
+    },
+    {
+      "field": "grades_served",
+      "category": "basic",
+      "currentSelectors": [
+        "[data-testid=\"grades-served\"]",
+        ".grades-served",
+        ".school-grades"
+      ],
+      "newSelectors": [
+        "body"
+      ],
+      "expectedValue": "9-12",
+      "actualValue": "9-12",
+      "confidence": 80,
+      "source": "text-pattern",
+      "notes": "Extract via regex: (?:grades?|serving)\\s*(?:levels?)?\\s*:?\\s*(\\d+(?:\\s*-\\s*\\d+)?)"
+    },
+    {
+      "field": "address_street",
+      "category": "location",
+      "currentSelectors": [
+        "[data-testid=\"school-address-street\"]",
+        ".school-address .street",
+        ".address-line-1"
+      ],
+      "newSelectors": [
+        "script[type=\"application/ld+json\"]"
+      ],
+      "expectedValue": "1000 S Quentin Rd",
+      "actualValue": "1000 S Quentin Rd",
+      "confidence": 95,
+      "source": "json-ld",
+      "notes": "Extract from JSON-LD: jsonData.location.address.streetAddress"
+    },
+    {
+      "field": "address_city",
+      "category": "location",
+      "currentSelectors": [
+        "[data-testid=\"school-city\"]",
+        ".school-location .city",
+        ".address-city"
+      ],
+      "newSelectors": [
+        "script[type=\"application/ld+json\"]"
+      ],
+      "expectedValue": "Palatine",
+      "actualValue": "Palatine",
+      "confidence": 95,
+      "source": "json-ld",
+      "notes": "Extract from JSON-LD: jsonData.location.address.addressLocality"
+    },
+    {
+      "field": "address_state",
+      "category": "location",
+      "currentSelectors": [
+        "[data-testid=\"school-state\"]",
+        ".school-location .state",
+        ".address-state"
+      ],
+      "newSelectors": [
+        "script[type=\"application/ld+json\"]"
+      ],
+      "expectedValue": "Illinois",
+      "actualValue": "IL",
+      "confidence": 90,
+      "source": "json-ld",
+      "notes": "Extract from JSON-LD: jsonData.location.address.addressRegion (note: abbreviation, may need expansion)"
+    },
+    {
+      "field": "address_zip",
+      "category": "location",
+      "currentSelectors": [
+        "[data-testid=\"school-zip\"]",
+        ".school-location .zip",
+        ".address-zip"
+      ],
+      "newSelectors": [
+        "script[type=\"application/ld+json\"]"
+      ],
+      "expectedValue": "60067",
+      "actualValue": "60067",
+      "confidence": 95,
+      "source": "json-ld",
+      "notes": "Extract from JSON-LD: jsonData.location.address.postalCode"
+    },
+    {
+      "field": "phone",
+      "category": "location",
+      "currentSelectors": [
+        "[data-testid=\"school-phone\"]",
+        ".school-contact .phone",
+        ".phone-number"
+      ],
+      "newSelectors": [
+        "script[type=\"application/ld+json\"]"
+      ],
+      "expectedValue": "(847) 755-2610",
+      "actualValue": "(847) 755-2610",
+      "confidence": 95,
+      "source": "json-ld",
+      "notes": "Extract from JSON-LD: jsonData.telephone"
+    },
+    {
+      "field": "ap_participation_rate",
+      "category": "academics",
+      "currentSelectors": [
+        "[data-testid=\"ap-participation\"]",
+        ".ap-stats .participation",
+        ".advanced-placement .participation"
+      ],
+      "newSelectors": [
+        "[data-test-id=\"participation_rate\"]"
+      ],
+      "expectedValue": 62,
+      "actualValue": 62,
+      "confidence": 98,
+      "source": "data-test-id",
+      "notes": "Working data-test-id selector found: [data-test-id=\"participation_rate\"]"
+    },
+    {
+      "field": "ap_pass_rate",
+      "category": "academics",
+      "currentSelectors": [
+        "[data-testid=\"ap-pass-rate\"]",
+        ".ap-stats .pass-rate",
+        ".advanced-placement .pass-rate"
+      ],
+      "newSelectors": [
+        "[data-test-id=\"participant_passing_rate\"]"
+      ],
+      "expectedValue": 56,
+      "actualValue": 56,
+      "confidence": 98,
+      "source": "data-test-id",
+      "notes": "Working data-test-id selector found: [data-test-id=\"participant_passing_rate\"]"
+    },
+    {
+      "field": "math_proficiency",
+      "category": "academics",
+      "currentSelectors": [
+        "[data-testid=\"math-proficiency\"]",
+        ".proficiency-math",
+        ".academic-performance .math"
+      ],
+      "newSelectors": [
+        "[data-test-id=\"school_percent_proficient_in_math\"]"
+      ],
+      "expectedValue": 64,
+      "actualValue": 64,
+      "confidence": 98,
+      "source": "data-test-id",
+      "notes": "Working data-test-id selector found: [data-test-id=\"school_percent_proficient_in_math\"]"
+    },
+    {
+      "field": "reading_proficiency",
+      "category": "academics",
+      "currentSelectors": [
+        "[data-testid=\"reading-proficiency\"]",
+        ".proficiency-reading",
+        ".academic-performance .reading"
+      ],
+      "newSelectors": [
+        "[data-test-id=\"school_percent_proficient_in_english\"]"
+      ],
+      "expectedValue": 63,
+      "actualValue": 63,
+      "confidence": 98,
+      "source": "data-test-id",
+      "notes": "Working data-test-id selector found: [data-test-id=\"school_percent_proficient_in_english\"]"
+    },
+    {
+      "field": "science_proficiency",
+      "category": "academics",
+      "currentSelectors": [
+        "[data-testid=\"science-proficiency\"]",
+        ".proficiency-science",
+        ".academic-performance .science"
+      ],
+      "newSelectors": [
+        "[data-test-id=\"school_percent_proficient_in_science\"]"
+      ],
+      "expectedValue": 77,
+      "actualValue": 77,
+      "confidence": 98,
+      "source": "data-test-id",
+      "notes": "Working data-test-id selector found: [data-test-id=\"school_percent_proficient_in_science\"]"
+    },
+    {
+      "field": "graduation_rate",
+      "category": "academics",
+      "currentSelectors": [
+        "[data-testid=\"graduation-rate\"]",
+        ".graduation-stats .rate",
+        ".graduation-percentage"
+      ],
+      "newSelectors": [
+        "[data-test-id=\"gradrate\"]"
+      ],
+      "expectedValue": 94,
+      "actualValue": 94,
+      "confidence": 98,
+      "source": "data-test-id",
+      "notes": "Working data-test-id selector found: [data-test-id=\"gradrate\"]"
+    },
+    {
+      "field": "college_readiness_index",
+      "category": "academics",
+      "currentSelectors": [
+        "[data-testid=\"college-readiness\"]",
+        ".college-readiness-score",
+        ".readiness-index"
+      ],
+      "newSelectors": [
+        "[data-test-id=\"ranknat_cri\"]"
+      ],
+      "expectedValue": 57.6,
+      "actualValue": "rank_found_need_actual_value",
+      "confidence": 50,
+      "source": "data-test-id",
+      "notes": "Found CRI rank but need to locate actual index value 57.6"
+    },
+    {
+      "field": "state_rank",
+      "category": "academics",
+      "currentSelectors": [
+        "#rankings_section",
+        ".RankingList__RankStyled-sc-7e61t7-1"
+      ],
+      "newSelectors": [
+        "a[href*=\"/illinois/rankings\"] .with-icon__Rank-sc-1spb2w-2"
+      ],
+      "expectedValue": 14,
+      "actualValue": 14,
+      "confidence": 95,
+      "source": "css-class",
+      "notes": "Extract state rank from Illinois rankings link"
+    }
+  ]
+}
