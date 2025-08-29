@@ -28,11 +28,11 @@ describe('US News Ranking System Validation', () => {
   let extractor: CSSExtractionMethod;
   let samples: RankingSample[] = [];
   
-  // US News ranking buckets (from business requirements)
+  // US News ranking buckets (CORRECTED from data analysis)
   const RANKING_BUCKETS = {
     EXACT_START: 1,
-    EXACT_END: 13426,
-    RANGE_START: 13427,
+    EXACT_END: 13427,    // CORRECTED: Actual max exact rank is 13427, not 13426
+    RANGE_START: 13428,  // CORRECTED: Range starts after exact rankings end
     RANGE_END: 17901
   };
 

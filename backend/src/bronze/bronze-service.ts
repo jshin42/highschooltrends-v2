@@ -224,6 +224,17 @@ export class BronzeService {
   }
 
   /**
+   * Get Bronze records by status with pagination for memory efficiency
+   */
+  async getRecordsByStatusPaginated(
+    status: ProcessingStatus, 
+    limit?: number, 
+    offset: number = 0
+  ): Promise<BronzeRecord[]> {
+    return this.database.getRecordsByStatusPaginated(status, limit, offset);
+  }
+
+  /**
    * Get Bronze record by school slug
    */
   async getRecordBySlug(schoolSlug: string): Promise<BronzeRecord | null> {

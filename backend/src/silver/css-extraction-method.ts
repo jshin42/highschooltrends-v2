@@ -1,5 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { BaseExtractionMethod } from './extraction-methods';
+import { RankingUniquenessValidator } from './ranking-uniqueness-validator';
 import { 
   SilverRecord,
   FieldConfidence,
@@ -509,20 +510,80 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
       // Cleanup DOM
       dom.window.close();
       
+      // Force garbage collection if available (enabled with --expose-gc)
+      if (global.gc) {
+        global.gc();
+      }
+      
+      // CRITICAL: Validate ranking uniqueness to prevent duplicate scenarios
+      let finalConfidence = overallConfidence;
+      let validationErrors: ExtractionError[] = [];
+      
+      if (extractedData.national_rank || extractedData.state_rank) {
+        try {
+          // Initialize validator with database path (would need to be configured)
+          const validator = new RankingUniquenessValidator('./data/silver.db');
+          
+          const validation = await validator.validateRankingUniqueness(extractedData, context);
+          
+          if (!validation.is_valid) {
+            // Add validation errors
+            validation.conflicts.forEach(conflict => {
+              validationErrors.push(this.createError(
+                'rankings',
+                'uniqueness_violation',
+                `Ranking conflict: ${conflict.conflict_type} for rank ${conflict.rank}`,
+                'uniqueness_validator'
+              ));
+            });
+            
+            // Adjust confidence based on conflicts
+            finalConfidence = Math.max(0, overallConfidence + validation.confidence_adjustment);
+            
+            // Log the conflict for audit purposes
+            this.logger.warn('Ranking uniqueness violation detected', {
+              school_slug: context.schoolSlug,
+              conflicts: validation.conflicts.length,
+              original_confidence: overallConfidence,
+              adjusted_confidence: finalConfidence
+            });
+          }
+          
+          validator.close();
+          
+        } catch (validationError) {
+          // If validation fails, continue but log the issue
+          this.logger.warn('Ranking validation failed', {
+            school_slug: context.schoolSlug,
+            error: this.getErrorMessage(validationError)
+          });
+        }
+      }
+      
       timer.end('CSS extraction completed', {
         fields_extracted: Object.keys(extractedData).length - 3, // Exclude metadata fields
-        overall_confidence: overallConfidence,
-        errors_count: errors.length
+        overall_confidence: finalConfidence,
+        errors_count: errors.length + validationErrors.length
       });
       
       return {
         data: extractedData,
-        confidence: overallConfidence,
+        confidence: finalConfidence,
         fieldConfidences: completeFieldConfidences,
-        errors
+        errors: [...errors, ...validationErrors]
       };
       
     } catch (error) {
+      // Ensure DOM cleanup even on error
+      try {
+        dom?.window?.close();
+        if (global.gc) {
+          global.gc();
+        }
+      } catch (cleanupError) {
+        // Ignore cleanup errors
+      }
+      
       timer.end('CSS extraction failed', { error: this.getErrorMessage(error) });
       
       return {
@@ -820,178 +881,164 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
   }
   
   /**
-   * Parse all ranking patterns from text, handling all 4 identified error cases
+   * Parse all ranking patterns from text with confidence weighting (not first-match-wins)
    */
   private parseAllRankingPatterns(text: string): {
     national?: ParsedRanking;
     state?: ParsedRanking;
   } {
-    const results: { national?: ParsedRanking; state?: ParsedRanking } = {};
+    // Collect all potential matches with confidence scores
+    const nationalCandidates: ParsedRanking[] = [];
+    const stateCandidates: ParsedRanking[] = [];
     
-    // Pattern 0: Authoritative data-test-id format - "ranked #<number>"
+    // Common US states for validation
+    const validStates = [
+      'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
+      'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
+      'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
+      'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
+      'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania',
+      'rhode island', 'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont',
+      'virginia', 'washington', 'west virginia', 'wisconsin', 'wyoming', 'district of columbia',
+      'puerto rico', 'virgin islands', 'guam'
+    ];
+    
+    // Pattern 1: Authoritative data-test-id format - "ranked #<number>" 
+    // This gets highest confidence but we still evaluate others
     const authoritativeMatch = text.match(/ranked\s*#\s*(\d{1,5}(?:,\d{3})*)/i);
     if (authoritativeMatch) {
       const rank = parseInt(authoritativeMatch[1].replace(/,/g, ''));
       if (rank >= 1 && rank <= 50000) {
-        results.national = {
+        nationalCandidates.push({
           rank: rank,
           rankEnd: null,
-          precision: rank <= 13426 ? 'exact' : (rank <= 17901 ? 'range' : 'estimated'),
-          confidence: 98 // Highest confidence for authoritative data-test-id
-        };
-        return results; // Return immediately - this is the most authoritative
+          precision: rank <= 13427 ? 'exact' : (rank <= 17901 ? 'range' : 'estimated'),
+          confidence: 98 // Highest confidence - this will likely win
+        });
       }
     }
     
-    // Pattern 1: Bucket 2 range representation - #13,427-17,901
+    // Pattern 2: Bucket 2 range representation - #13,428-17,901 (NOT 13,427!)
+    // CRITICAL FIX: Reject suspicious 13,427 patterns that were causing pollution
     const bucket2RangeMatch = text.match(/#(\d{1,2},\d{3})-(\d{1,2},\d{3})/);
     if (bucket2RangeMatch) {
       const startRank = parseInt(bucket2RangeMatch[1].replace(/,/g, ''));
       const endRank = parseInt(bucket2RangeMatch[2].replace(/,/g, ''));
-      if (startRank >= 13427 && endRank <= 17901) {
-        results.national = {
+      
+      // CRITICAL: If startRank is 13427, this was the old boundary error - reject it
+      if (startRank === 13427) {
+        console.warn(`Rejecting suspicious 13427 range pattern - likely false positive from old boundary logic`);
+        // Continue to other patterns instead of accepting this
+      } else if (startRank >= 13428 && startRank <= 17901 && endRank >= startRank && endRank <= 17901) {
+        // Range is within legitimate Bucket 2 bounds - accept it
+        nationalCandidates.push({
           rank: startRank,
           rankEnd: endRank,
           precision: 'range',
           confidence: 95
-        };
-        return results;
+        });
       }
     }
     
-    // Pattern 2: Composite ranking - "#1,102 in National Rankings #10 in South Carolina High Schools" 
+    // Pattern 3: Composite ranking - "#1,102 in National Rankings #10 in South Carolina High Schools" 
     // (MUST be checked before state-only pattern since it contains state pattern as substring)
     const compositeMatch = text.match(/#(\d{1,4}(?:,\d{3})*)\s+in\s+National\s+Rankings\s+#(\d{1,4})\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+High\s+Schools?/i);
     if (compositeMatch) {
       const nationalRank = parseInt(compositeMatch[1].replace(/,/g, ''));
       const stateRank = parseInt(compositeMatch[2]);
-      const stateName = compositeMatch[3];
+      const stateName = compositeMatch[3].toLowerCase();
       
       if (nationalRank >= 1 && nationalRank <= 50000) {
-        results.national = {
+        nationalCandidates.push({
           rank: nationalRank,
           rankEnd: null,
-          precision: nationalRank <= 13426 ? 'exact' : (nationalRank <= 17901 ? 'range' : 'estimated'),
+          precision: nationalRank <= 13427 ? 'exact' : (nationalRank <= 17901 ? 'range' : 'estimated'),
           confidence: 95
-        };
+        });
       }
       
-      if (stateRank >= 1 && stateRank <= 1000) {
-        results.state = {
+      if (stateRank >= 1 && stateRank <= 1000 && validStates.includes(stateName)) {
+        stateCandidates.push({
           rank: stateRank,
           rankEnd: null,
           precision: 'exact',
           confidence: 95
-        };
+        });
       }
-      
-      return results;
     }
     
-    // Pattern 3: State ranking ranges - "#522-672 in Pennsylvania High Schools"  
+    // Pattern 4: State ranking ranges - "#522-672 in Pennsylvania High Schools"  
     const stateRangeMatch = text.match(/#(\d{1,4}(?:,\d{3})*)-(\d{1,4}(?:,\d{3})*)\s*in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+High\s+Schools?/i);
     if (stateRangeMatch) {
       const startRank = parseInt(stateRangeMatch[1].replace(/,/g, ''));
       const endRank = parseInt(stateRangeMatch[2].replace(/,/g, ''));
       const state = stateRangeMatch[3].toLowerCase();
       
-      // Validate it's a real US state/territory
-      const validStates = [
-        'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
-        'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
-        'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
-        'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
-        'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania',
-        'rhode island', 'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont',
-        'virginia', 'washington', 'west virginia', 'wisconsin', 'wyoming', 'district of columbia',
-        'puerto rico', 'virgin islands', 'guam'
-      ];
-      
       if (startRank >= 1 && endRank <= 10000 && startRank <= endRank && validStates.includes(state)) {
-        results.state = {
+        stateCandidates.push({
           rank: startRank,
           rankEnd: endRank,
           precision: 'range',
           confidence: 95
-        };
-        return results;
+        });
       }
     }
     
-    // Pattern 4: State-only ranking - "#1,092 in Texas High Schools" or "#14in Illinois High Schools"
+    // Pattern 5: State-only ranking - "#1,092 in Texas High Schools" or "#14in Illinois High Schools"
     const stateOnlyMatch = text.match(/#(\d{1,4}(?:,\d{3})*)\s*in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+High\s+Schools?/i);
     if (stateOnlyMatch) {
       const rank = parseInt(stateOnlyMatch[1].replace(/,/g, ''));
       const state = stateOnlyMatch[2].toLowerCase();
       
-      // Validate it's a real US state/territory, not just any word
-      const validStates = [
-        'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
-        'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
-        'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
-        'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
-        'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania',
-        'rhode island', 'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont',
-        'virginia', 'washington', 'west virginia', 'wisconsin', 'wyoming', 'district of columbia',
-        'puerto rico', 'virgin islands', 'guam'
-      ];
+      // Exclude common district/system keywords
+      const isDistrictRanking = state.includes('district') || state.includes('township') || 
+                               state.includes('system') || state.includes('county') ||
+                               state.includes('isd') || state.includes('unified');
       
-      if (rank >= 1 && rank <= 10000 && !state.includes('national') && validStates.includes(state)) {
-        results.state = {
+      if (rank >= 1 && rank <= 10000 && !state.includes('national') && 
+          !isDistrictRanking && validStates.includes(state)) {
+        stateCandidates.push({
           rank: rank,
           rankEnd: null,
           precision: 'state_only',
           confidence: 95
-        };
-        return results;
+        });
       }
     }
     
-    // Pattern 4: Standard national ranking - "#6,979 in National Rankings"
+    // Pattern 6: Standard national ranking - "#6,979 in National Rankings"
     const standardNationalMatch = text.match(/#(\d{1,4}(?:,\d{3})*)\s+in\s+National\s+Rankings?/i);
     if (standardNationalMatch) {
       const rank = parseInt(standardNationalMatch[1].replace(/,/g, ''));
       if (rank >= 1 && rank <= 50000) {
-        results.national = {
+        nationalCandidates.push({
           rank: rank,
           rankEnd: null,
-          precision: rank <= 13426 ? 'exact' : (rank <= 17901 ? 'range' : 'estimated'),
+          precision: rank <= 13427 ? 'exact' : (rank <= 17901 ? 'range' : 'estimated'),
           confidence: 95
-        };
-        return results;
+        });
       }
     }
     
-    // Fallback patterns for other ranking formats (ONLY if no result already found)
+    // Pattern 7: Fallback national patterns - lower confidence
     const fallbackNationalMatch = text.match(/#(\d+)\s*(?:in\s*)?(?:National|national)\s*(?:Rankings?)?/i);
-    if (fallbackNationalMatch && !results.national) {
+    if (fallbackNationalMatch) {
       const rank = parseInt(fallbackNationalMatch[1]);
       if (rank >= 1 && rank <= 50000) {
-        results.national = {
+        nationalCandidates.push({
           rank: rank,
           rankEnd: null,
-          precision: rank <= 13426 ? 'exact' : (rank <= 17901 ? 'range' : 'estimated'),
+          precision: rank <= 13427 ? 'exact' : (rank <= 17901 ? 'range' : 'estimated'),
           confidence: 85
-        };
+        });
       }
     }
     
+    // Pattern 8: Fallback state patterns - lower confidence
     const fallbackStateMatch = text.match(/#(\d+)\s*(?:in\s*)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*(?:High\s*Schools?)?/i);
-    if (fallbackStateMatch && !results.state) {
+    if (fallbackStateMatch) {
       const rank = parseInt(fallbackStateMatch[1]);
       const location = fallbackStateMatch[2].toLowerCase();
-      
-      // Validate it's a real state, not a district/system
-      const validStates = [
-        'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
-        'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
-        'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
-        'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
-        'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania',
-        'rhode island', 'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont',
-        'virginia', 'washington', 'west virginia', 'wisconsin', 'wyoming', 'district of columbia',
-        'puerto rico', 'virgin islands', 'guam'
-      ];
       
       // Exclude common district/system keywords
       const isDistrictRanking = location.includes('district') || location.includes('township') || 
@@ -1000,13 +1047,40 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
       
       if (rank >= 1 && rank <= 5000 && !location.includes('national') && 
           !isDistrictRanking && validStates.includes(location)) {
-        results.state = {
+        stateCandidates.push({
           rank: rank,
           rankEnd: null,
           precision: 'exact',
           confidence: 85
-        };
+        });
       }
+    }
+    
+    // CONFIDENCE-BASED SELECTION: Choose the best candidates from each category
+    const results: { national?: ParsedRanking; state?: ParsedRanking } = {};
+    
+    // Select best national ranking candidate
+    if (nationalCandidates.length > 0) {
+      // Sort by confidence (highest first), then by specificity (exact > range > estimated)
+      nationalCandidates.sort((a, b) => {
+        if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+        const precisionOrder: Record<string, number> = { exact: 3, range: 2, estimated: 1 };
+        return (precisionOrder[b.precision] || 0) - (precisionOrder[a.precision] || 0);
+      });
+      
+      results.national = nationalCandidates[0];
+    }
+    
+    // Select best state ranking candidate
+    if (stateCandidates.length > 0) {
+      // Sort by confidence (highest first), then by precision
+      stateCandidates.sort((a, b) => {
+        if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+        const precisionOrder: Record<string, number> = { exact: 3, state_only: 2, range: 1 };
+        return (precisionOrder[b.precision] || 0) - (precisionOrder[a.precision] || 0);
+      });
+      
+      results.state = stateCandidates[0];
     }
     
     return results;

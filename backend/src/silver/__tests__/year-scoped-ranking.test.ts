@@ -25,8 +25,8 @@ describe('Year-Scoped Ranking Validation', () => {
   let extractor: CSSExtractionMethod;
   const RANKING_BUCKETS = {
     EXACT_START: 1,
-    EXACT_END: 13426,
-    RANGE_START: 13427,
+    EXACT_END: 13427,  // CORRECTED: Based on actual data analysis, max rank is 13427 not 13426
+    RANGE_START: 13428, // CORRECTED: Range starts after exact rankings end
     RANGE_END: 17901
   };
 
@@ -104,7 +104,7 @@ describe('Year-Scoped Ranking Validation', () => {
       expect(school.nationalRank).toBeLessThanOrEqual(RANKING_BUCKETS.EXACT_END);
     });
 
-    // Validate bucket 2 boundaries (range ranks 13,427-17,901)  
+    // Validate bucket 2 boundaries (range ranks 13,428-17,901)  
     bucket2Schools.forEach(school => {
       expect(school.nationalRank).toBeGreaterThanOrEqual(RANKING_BUCKETS.RANGE_START);
       expect(school.nationalRank).toBeLessThanOrEqual(RANKING_BUCKETS.RANGE_END);
@@ -243,14 +243,14 @@ describe('Year-Scoped Ranking Validation', () => {
       
       if (nationalRank) {
         if (nationalRank >= RANKING_BUCKETS.EXACT_START && nationalRank <= RANKING_BUCKETS.EXACT_END) {
-          bucket = 1;
+          bucket = 1;  // Exact rankings 1-13427
         } else if (nationalRank >= RANKING_BUCKETS.RANGE_START && nationalRank <= RANKING_BUCKETS.RANGE_END) {
-          bucket = 2;
+          bucket = 2;  // Range rankings 13428-17901
         } else {
-          bucket = 3;
+          bucket = 3;  // Estimated rankings >17901 or extraction-derived
         }
       } else if (result.data.state_rank) {
-        bucket = 3;
+        bucket = 3;    // State-only rankings (no national rank)
       }
 
       return {

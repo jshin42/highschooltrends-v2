@@ -172,6 +172,31 @@ export class BronzeDatabase {
   }
 
   /**
+   * Get records with specified processing status using LIMIT/OFFSET for memory efficiency
+   */
+  getRecordsByStatusPaginated(
+    status: ProcessingStatus, 
+    limit?: number, 
+    offset: number = 0
+  ): BronzeRecord[] {
+    let sql = 'SELECT * FROM bronze_records WHERE processing_status = ? ORDER BY id';
+    const params: any[] = [status];
+    
+    if (limit !== undefined) {
+      sql += ' LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+    } else if (offset > 0) {
+      sql += ' OFFSET ?';
+      params.push(offset);
+    }
+    
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as any[];
+    
+    return rows.map(row => this.mapRowToRecord(row));
+  }
+
+  /**
    * Update processing status of a record
    */
   updateRecordStatus(id: number, status: ProcessingStatus, errors?: string[]): boolean {
