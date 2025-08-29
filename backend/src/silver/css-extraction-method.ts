@@ -91,6 +91,9 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
     ],
     
     website: [
+      'script[type="application/ld+json"]',     // PRIMARY: Extract from JSON-LD if available
+      'a[href*="adc.d211.org"]',               // SECONDARY: School district website pattern  
+      'a[href^="http"]',                        // TERTIARY: Any HTTP link (may need filtering)
       '[data-testid="school-website"]',
       '.school-contact .website a',
       '.website-link'
@@ -149,8 +152,9 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
     ],
     
     state_rank: [
-      'a[href*="/illinois/rankings"] .with-icon__Rank-sc-1spb2w-2', // PRIMARY: State-specific ranking link
-      '#rankings_section',                      // Rankings section container (contains full context)
+      'a[href*="/rankings"]:not([href*="district"]):not([href*="national"]):not([href*="chicago"]):not([href*="metro"]) .with-icon__Rank-sc-1spb2w-2', // PRIMARY: Any state ranking link, excluding district/metro/national
+      '#rankings_section a[href$="/rankings"] .with-icon__Rank-sc-1spb2w-2', // SECONDARY: Direct state rankings link  
+      'a[href*="/rankings"][href*="state"] .with-icon__Rank-sc-1spb2w-2', // State-specific rankings
       '.RankingList__RankStyled-sc-7e61t7-1',  // Same elements contain both national and state
       '.with-icon__Rank-sc-1spb2w-2',         // Alternative ranking display
       'react-trigger',                          // Combined ranking element (fallback)
@@ -305,63 +309,30 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
       
       // Try to extract from JSON-LD structured data first (US News format)
       const structuredData = this.extractStructuredData(document);
+      let jsonLdData: any = {};
+      let jsonLdConfidences: any = {};
+      let jsonLdErrors: any[] = [];
+      
       if (structuredData) {
         const jsonResult = await this.extractFromStructuredData(structuredData, context);
+        jsonLdData = { ...jsonResult.data };
+        jsonLdConfidences = { ...jsonResult.fieldConfidences };
+        jsonLdErrors = [...jsonResult.errors];
         
-        // If JSON-LD extraction found rankings, return it
-        if (jsonResult.data.national_rank || jsonResult.data.state_rank) {
-          return jsonResult;
-        }
-        
-        // JSON-LD found basic info but no rankings - enhance with CSS selector rankings
-        const enhancedData = { ...jsonResult.data };
-        const enhancedConfidences = { ...jsonResult.fieldConfidences };
-        const enhancedErrors = [...jsonResult.errors];
-        
-        // Check for explicit unranked status first
-        const unrankedStatus = this.checkUnrankedStatus(document);
-        if (unrankedStatus.isUnranked) {
-          // School is explicitly marked as unranked
-          enhancedData.is_unranked = true;
-          enhancedData.unranked_reason = unrankedStatus.reason;
-          enhancedConfidences.rankings = unrankedStatus.confidence;
-        } else {
-          // School is not explicitly unranked - extract rankings using CSS selectors
-          enhancedData.is_unranked = false;
-          
-          const rankingResults = this.extractEnhancedRankings(document);
-          this.applyEnhancedRankingResults(enhancedData, enhancedConfidences, enhancedErrors, rankingResults);
-          
-          // Update rankings confidence
-          enhancedConfidences.rankings = Math.max(
-            enhancedConfidences.national_rank || 0,
-            enhancedConfidences.state_rank || 0
-          );
-        }
-        
-        // Recalculate overall confidence
-        const confidenceValues = Object.values(enhancedConfidences).filter((c): c is number => typeof c === 'number' && c > 0);
-        const overallConfidence = confidenceValues.length > 0 
-          ? confidenceValues.reduce((sum, c) => sum + c, 0) / confidenceValues.length
-          : jsonResult.confidence;
-        
-        return {
-          data: enhancedData,
-          confidence: overallConfidence,
-          fieldConfidences: enhancedConfidences,
-          errors: enhancedErrors
-        };
+        // CRITICAL FIX: Never return early - always continue to CSS extraction
+        // JSON-LD only provides basic info, CSS extraction provides the rest
       }
       
-      // Initialize result containers
+      // Initialize result containers - start with JSON-LD data if available
       const extractedData: Partial<SilverRecord> = {
         bronze_record_id: context.bronzeRecord.id,
         school_slug: context.schoolSlug,
-        source_year: context.sourceYear
+        source_year: context.sourceYear,
+        ...jsonLdData  // Merge JSON-LD data first
       };
       
-      const fieldConfidences: Partial<FieldConfidence> = {};
-      const errors: ExtractionError[] = [];
+      const fieldConfidences: Partial<FieldConfidence> = { ...jsonLdConfidences };
+      const errors: ExtractionError[] = [...jsonLdErrors];
       
       // Extract ALL gold standard fields (only report critical field errors)
       
@@ -807,7 +778,18 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
           if (!text) continue;
           
           // Parse all ranking patterns from this text
-          const patterns = this.parseAllRankingPatterns(text);
+          let patterns = this.parseAllRankingPatterns(text);
+          
+          // If no state ranking found, try parent element text (contains full context)
+          if (!patterns.state && element.parentElement) {
+            const parentText = element.parentElement.textContent?.trim();
+            if (parentText && parentText !== text) {
+              const parentPatterns = this.parseAllRankingPatterns(parentText);
+              if (parentPatterns.state) {
+                patterns.state = parentPatterns.state;
+              }
+            }
+          }
           
           // Apply the best patterns found
           if (patterns.national && !result.national_rank) {
@@ -906,8 +888,38 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
       return results;
     }
     
-    // Pattern 3: State-only ranking - "#1,092 in Texas High Schools"
-    const stateOnlyMatch = text.match(/#(\d{1,4}(?:,\d{3})*)\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+High\s+Schools?/i);
+    // Pattern 3: State ranking ranges - "#522-672 in Pennsylvania High Schools"  
+    const stateRangeMatch = text.match(/#(\d{1,4}(?:,\d{3})*)-(\d{1,4}(?:,\d{3})*)\s*in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+High\s+Schools?/i);
+    if (stateRangeMatch) {
+      const startRank = parseInt(stateRangeMatch[1].replace(/,/g, ''));
+      const endRank = parseInt(stateRangeMatch[2].replace(/,/g, ''));
+      const state = stateRangeMatch[3].toLowerCase();
+      
+      // Validate it's a real US state/territory
+      const validStates = [
+        'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
+        'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
+        'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
+        'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
+        'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania',
+        'rhode island', 'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont',
+        'virginia', 'washington', 'west virginia', 'wisconsin', 'wyoming', 'district of columbia',
+        'puerto rico', 'virgin islands', 'guam'
+      ];
+      
+      if (startRank >= 1 && endRank <= 10000 && startRank <= endRank && validStates.includes(state)) {
+        results.state = {
+          rank: startRank,
+          rankEnd: endRank,
+          precision: 'range',
+          confidence: 95
+        };
+        return results;
+      }
+    }
+    
+    // Pattern 4: State-only ranking - "#1,092 in Texas High Schools" or "#14in Illinois High Schools"
+    const stateOnlyMatch = text.match(/#(\d{1,4}(?:,\d{3})*)\s*in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+High\s+Schools?/i);
     if (stateOnlyMatch) {
       const rank = parseInt(stateOnlyMatch[1].replace(/,/g, ''));
       const state = stateOnlyMatch[2].toLowerCase();
@@ -968,7 +980,26 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
     if (fallbackStateMatch && !results.state) {
       const rank = parseInt(fallbackStateMatch[1]);
       const location = fallbackStateMatch[2].toLowerCase();
-      if (rank >= 1 && rank <= 5000 && !location.includes('national')) {
+      
+      // Validate it's a real state, not a district/system
+      const validStates = [
+        'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
+        'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
+        'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
+        'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
+        'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania',
+        'rhode island', 'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont',
+        'virginia', 'washington', 'west virginia', 'wisconsin', 'wyoming', 'district of columbia',
+        'puerto rico', 'virgin islands', 'guam'
+      ];
+      
+      // Exclude common district/system keywords
+      const isDistrictRanking = location.includes('district') || location.includes('township') || 
+                               location.includes('system') || location.includes('county') ||
+                               location.includes('isd') || location.includes('unified');
+      
+      if (rank >= 1 && rank <= 5000 && !location.includes('national') && 
+          !isDistrictRanking && validStates.includes(location)) {
         results.state = {
           rank: rank,
           rankEnd: null,
@@ -1242,14 +1273,52 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
   }
 
   private extractWebsite(document: Document): { value: string | null; confidence: number; error?: ExtractionError } {
+    // Try to find school website in address paragraph first
+    const addressParagraph = document.querySelector('p');
+    if (addressParagraph) {
+      const text = addressParagraph.textContent || '';
+      // Look for URL in the address info (format: "| http://domain.com")  
+      const urlMatch = text.match(/\|\s*(https?:\/\/[^\s|]+)/);
+      if (urlMatch && !urlMatch[1].includes('usnews.com')) {
+        return { value: urlMatch[1], confidence: 90 };
+      }
+    }
+    
+    // Try ALL span.sm-hide elements for school website (URL is in 2nd span, not 1st)
+    const websiteSpans = document.querySelectorAll('span.sm-hide');
+    for (const websiteSpan of websiteSpans) {
+      const text = websiteSpan.textContent || '';
+      const urlMatch = text.match(/https?:\/\/[^\s|]+/);
+      if (urlMatch && !urlMatch[0].includes('usnews.com')) {
+        return { value: urlMatch[0], confidence: 95 };
+      }
+    }
+    
+    // Try JSON-LD (but it usually has US News URLs)
+    const jsonLdScript = document.querySelector('script[type="application/ld+json"]');
+    if (jsonLdScript) {
+      try {
+        const jsonData = JSON.parse(jsonLdScript.textContent || '{}');
+        if (jsonData.url && typeof jsonData.url === 'string' && !jsonData.url.includes('usnews.com')) {
+          return { value: jsonData.url, confidence: 80 };
+        }
+      } catch {
+        // Continue to CSS selectors
+      }
+    }
+    
+    // Try CSS selectors as fallback
     for (const selector of CSSExtractionMethod.SELECTORS.website) {
       try {
+        // Skip selectors we already tried
+        if (selector === 'script[type="application/ld+json"]') continue;
+        
         const element = document.querySelector(selector);
         if (element) {
           const href = element.getAttribute('href') || element.textContent?.trim();
-          if (href && (href.startsWith('http') || href.includes('.'))) {
+          if (href && (href.startsWith('http') || href.includes('.')) && !href.includes('usnews.com')) {
             const url = href.startsWith('http') ? href : `http://${href}`;
-            return { value: url, confidence: 85 };
+            return { value: url, confidence: 70 };
           }
         }
       } catch (error) {
@@ -1260,7 +1329,7 @@ export class CSSExtractionMethod extends BaseExtractionMethod {
     return {
       value: null,
       confidence: 0,
-      error: this.createError('website', 'css_selector_failed', 'No website found with CSS selectors', 'css_selector')
+      error: this.createError('website', 'css_selector_failed', 'No website found with CSS selectors or JSON-LD', 'css_selector')
     };
   }
 
