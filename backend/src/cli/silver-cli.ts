@@ -32,6 +32,7 @@ program
   .option('-db, --database <path>', 'Database file path', './data/silver.db')
   .option('-b, --batch-size <size>', 'Batch size for processing', '50')
   .option('-l, --limit <count>', 'Limit number of records to process')
+  .option('-o, --offset <count>', 'Skip this many records (for worker distribution)', '0')
   .option('--bronze-db <path>', 'Bronze database path', './data/bronze.db')
   .option('--confidence-threshold <threshold>', 'Minimum confidence threshold', '70')
   .option('--dry-run', 'Show what would be processed without making changes')
@@ -56,16 +57,28 @@ program
         console.log('🧪 Dry run mode - no changes will be made\n');
       }
       
-      // Get Bronze records to process
+      // Get Bronze records to process with memory-efficient pagination
       console.log('📊 Querying Bronze layer for pending records...');
       const bronzeConfig: Partial<BronzeConfiguration> = {};
       const bronzeService = createBronzeService(bronzeConfig, options.bronzeDb);
       await bronzeService.initialize();
       
-      const pendingRecords = await bronzeService.getRecordsByStatus('pending');
-      const recordsToProcess = options.limit ? 
-        pendingRecords.slice(0, parseInt(options.limit)) : 
-        pendingRecords;
+      const offset = parseInt(options.offset) || 0;
+      const limit = options.limit ? parseInt(options.limit) : undefined;
+      
+      console.log(`📄 Loading records with offset=${offset}, limit=${limit || 'ALL'}`);
+      
+      // Memory-efficient record loading: use database-level pagination
+      const recordsToProcess = await bronzeService.getRecordsByStatusPaginated(
+        'pending', 
+        limit, 
+        offset
+      );
+      
+      console.log(`📊 Loaded ${recordsToProcess.length} records with database pagination (offset=${offset}, limit=${limit || 'ALL'})`);
+      
+      // Note: Total count reporting removed to avoid loading all records into memory
+      // Use separate stats command if total count is needed
       
       console.log(`📄 Found ${recordsToProcess.length} records to process\n`);
       

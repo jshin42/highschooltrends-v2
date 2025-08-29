@@ -218,9 +218,9 @@ describe('Ground Truth Validation', () => {
       const nationalRank = result.data.national_rank;
       
       if (nationalRank) {
-        if (nationalRank >= 1 && nationalRank <= 13426) {
+        if (nationalRank >= 1 && nationalRank <= 13427) {  // CORRECTED: Max exact rank is 13427
           bucket = 1;
-        } else if (nationalRank >= 13427 && nationalRank <= 17901) {
+        } else if (nationalRank >= 13428 && nationalRank <= 17901) {  // CORRECTED: Range starts at 13428
           bucket = 2;
         } else {
           bucket = 3;
